@@ -872,6 +872,32 @@ tbody tr{transition:.12s} tbody tr:hover{background:var(--panel2)}
     <button class="btn btn-gold" onclick="salvarTitulo()">Salvar</button></div>
 </div></div>
 
+<!-- ===================== Reclassificar lançamento ===================== -->
+<div class="overlay" id="ovReclass"><div class="modal">
+  <div class="modal-head"><h3>Reclassificar lançamento</h3><button class="modal-x" onclick="closeModal('ovReclass')">×</button></div>
+  <div class="modal-body">
+    <input type="hidden" id="rx_id">
+    <div class="prorrog-info" id="rx_info"></div>
+    <div class="alert">Reclassificar mexe só em <b>onde</b> o lançamento aparece — conta, serviço, descrição.
+      Valor, data e resultado ficam como estão, então saldo, montante e conciliação não mudam.</div>
+    <div class="field"><label>Descrição</label><input id="rx_desc"></div>
+    <div class="field"><label>Cliente</label><input id="rx_cli" list="dlClientes" oninput="prev('rx_cli','rx_cliPrev')"></div>
+    <div class="cprev" id="rx_cliPrev"></div>
+    <div class="field"><label>Conta</label><select id="rx_conta" onchange="rxMudou()"></select>
+      <div class="hint" id="rx_contaHint"></div></div>
+    <div class="field"><label>Serviço</label>
+      <div class="seg sm" id="rx_serv">
+        <div class="o" data-v="BPO" onclick="rxServ('BPO')">BPO Financeiro</div>
+        <div class="o" data-v="GIRO" onclick="rxServ('GIRO')">Capital de Giro</div>
+        <div class="o" data-v="AMBOS" onclick="rxServ('AMBOS')">Geral</div>
+      </div>
+      <div class="hint" id="rx_servHint"></div></div>
+    <div class="erro" id="rx_erro"></div>
+  </div>
+  <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal('ovReclass')">Cancelar</button>
+    <button class="btn btn-gold" onclick="salvarReclass()">Salvar</button></div>
+</div></div>
+
 <!-- ===================== Confirmação ===================== -->
 <div class="overlay" id="ovConf"><div class="modal" style="max-width:440px">
   <div class="modal-head"><h3 id="cf_tit">Confirmar</h3><button class="modal-x" onclick="closeModal('ovConf')">×</button></div>
@@ -1694,21 +1720,28 @@ function addDoRazao(qual) {
   else if (qual === 'ant') { abrirAnt(); setVal('at_envio', dataSugerida()); atCalc(); }
   else { abrirLanc(); setVal('lc_data', dataSugerida()); }
 }
+/* Reclassificar vale para qualquer linha, porque mexe só em conta, serviço e
+   texto — nunca em valor. É o que resolve lançamento que veio da planilha com
+   o tipo trocado (recebimento de título registrado como retorno de antecipação,
+   por exemplo) sem precisar apagar e refazer nada. */
 function acoesRazao(m) {
+  const rc = `<button class="iconbtn" title="Reclassificar: trocar conta e serviço" onclick="abrirReclass('${m.id}')">🏷</button>`;
   if (!TIPOS_ESTRUTURAIS.includes(m.tipo))
-    return `<button class="iconbtn" title="Editar" onclick="abrirLanc('${m.id}')">✎</button>
+    return rc + `<button class="iconbtn" title="Editar" onclick="abrirLanc('${m.id}')">✎</button>
             <button class="iconbtn del" title="Excluir" onclick="excluirLanc('${m.id}')">🗑</button>`;
   if (m.tipo === 'OPERACAO' && m.operacaoId) {
-    if (!podeEditarOper(m.operacaoId)) return `<span class="muted" title="Título já recebido">🔒</span>`;
-    return `<button class="iconbtn" title="Editar operação" onclick="abrirOper('${m.operacaoId}')">✎</button>
+    if (!podeEditarOper(m.operacaoId)) return rc + `<span class="muted" title="Título já recebido">🔒</span>`;
+    return rc + `<button class="iconbtn" title="Editar operação" onclick="abrirOper('${m.operacaoId}')">✎</button>
             <button class="iconbtn del" title="Excluir operação" onclick="excluirOper('${m.operacaoId}')">🗑</button>`;
   }
   if (m.tipo === 'ANTECIPACAO_ENVIO' && m.tituloId) {
-    if (!podeEditarAnt(m.tituloId)) return `<button class="iconbtn" title="Antecipação já retornou — dá para corrigir os dados" onclick="abrirTitulo('${m.tituloId}')">✎</button>`;
-    return `<button class="iconbtn" title="Editar antecipação" onclick="abrirAnt('${m.tituloId}')">✎</button>
+    if (!podeEditarAnt(m.tituloId)) return rc + `<button class="iconbtn" title="Antecipação já retornou — dá para corrigir os dados" onclick="abrirTitulo('${m.tituloId}')">✎</button>`;
+    return rc + `<button class="iconbtn" title="Editar antecipação" onclick="abrirAnt('${m.tituloId}')">✎</button>
             <button class="iconbtn del" title="Excluir antecipação" onclick="excluirAnt('${m.tituloId}')">🗑</button>`;
   }
-  return `<span class="muted">—</span>`;
+  // Estrutural sem vínculo editável (o caso do histórico importado): não dá
+  // para mexer no valor sem desencontrar do título, mas reclassificar sim.
+  return rc;
 }
 /* Ritmo: lançar no dia é o que mantém a conciliação barata de conferir. */
 function ritmoDoMes(mk, linhas) {
@@ -3892,6 +3925,72 @@ function excluirTitulo() {
     }
     save(); closeModal('ovTitulo'); render(); toast('Título movido para Excluídos');
   }, 'Excluir título');
+}
+
+/* =========================================================================
+   Reclassificar lançamento
+   ---------------------------------------------------------------------------
+   Existe porque parte do histórico veio da planilha com o tipo trocado — um
+   recebimento de título registrado como retorno de antecipação, por exemplo.
+   Os valores estão certos; o que está errado é onde aquilo aparece no DRE.
+   Por isso esta tela mexe só em conta, serviço, descrição e cliente: valor,
+   data e resultado ficam intactos, e a conciliação não se move um centavo.
+   ========================================================================= */
+let rxServico = null;
+function abrirReclass(id) {
+  const m = DB.movs.find(x => x.id === id); if (!m) return;
+  limpaErro('rx_erro');
+  setVal('rx_id', m.id);
+  const c = contaDaMov(m), valor = (m.entrada || 0) - (m.saida || 0);
+  const tit = m.tituloId ? DB.titulos.find(t => t.id === m.tituloId) : null;
+  el('rx_info').innerHTML = `
+    <div><div class="k">Data</div><div class="v" style="font-size:13px">${fmtBR(m.data)}</div></div>
+    <div><div class="k">Fonte</div><div class="v" style="font-size:13px">${fonteTag(m.fonte)}</div></div>
+    <div><div class="k">Valor no caixa</div><div class="v ${valor < 0 ? 'neg' : 'pos'}">${brl(valor)}</div></div>
+    <div><div class="k">Resultado</div><div class="v ${(m.resultado || 0) < 0 ? 'neg' : m.resultado ? 'pos' : 'muted'}">${m.resultado ? brl(m.resultado) : '—'}</div></div>`;
+  setVal('rx_desc', m.descricao); setVal('rx_cli', m.cliente); prev('rx_cli', 'rx_cliPrev');
+  el('rx_conta').innerHTML = opcoesConta(c.id || '');
+  el('rx_contaHint').textContent = tit
+    ? `Ligado ao título ${tit.cliente}${tit.nf ? ' — NF ' + tit.nf : ''}.`
+    : `Classificação atual: ${c.nome} (${c.grupo}).`;
+  rxServico = m.servico || null;
+  rxMudou();
+  openModal('ovReclass'); setTimeout(() => el('rx_conta').focus(), 60);
+}
+function rxServ(c) { rxServico = c; rxMudou(); }
+function rxMudou() {
+  const conta = contaPorId(val('rx_conta'));
+  const padrao = conta ? (conta.servico || 'AMBOS') : null;
+  const efetivo = rxServico || padrao || 'AMBOS';
+  document.querySelectorAll('#rx_serv .o').forEach(o => o.classList.toggle('sel', o.dataset.v === efetivo));
+  const patrimonial = conta && conta.grupo === 'Movimentação Patrimonial';
+  el('rx_serv').style.opacity = patrimonial ? '.45' : '1';
+  el('rx_servHint').textContent = !conta ? 'Escolha a conta e o serviço vem sugerido dela.'
+    : patrimonial ? 'Conta patrimonial não entra no resultado, então não tem serviço.'
+      : (rxServico && rxServico !== padrao)
+        ? `A conta "${conta.nome}" sugere ${SERV_NOME[padrao]} — este lançamento vai gravado como ${SERV_NOME[efetivo]}.`
+        : `Veio da conta "${conta.nome}".`;
+}
+function salvarReclass() {
+  limpaErro('rx_erro');
+  const m = DB.movs.find(x => x.id === val('rx_id'));
+  if (!m) return erro('rx_erro', 'Lançamento não encontrado.');
+  const conta = contaPorId(val('rx_conta'));
+  if (!conta) return erro('rx_erro', 'Escolha a conta.');
+  const cli = val('rx_cli').trim();
+  const antes = { saldo: conc('GERAL').saldo, montante: conc('GERAL').montante };
+  m.descricao = val('rx_desc').trim();
+  m.cliente = cli;
+  m.contaId = conta.id;
+  // só grava o serviço quando é diferente do padrão da conta, para reclassificar
+  // a conta continuar arrastando junto quem não tem escolha própria
+  m.servico = (rxServico && rxServico !== (conta.servico || 'AMBOS')) ? rxServico : null;
+  garantirCliente(cli);
+  const depois = { saldo: conc('GERAL').saldo, montante: conc('GERAL').montante };
+  save(); closeModal('ovReclass'); render();
+  // a promessa da tela é justamente essa: nada de dinheiro se move
+  const mexeu = Math.abs(depois.saldo - antes.saldo) > .005 || Math.abs(depois.montante - antes.montante) > .005;
+  toast(mexeu ? 'Reclassificado (confira a conciliação)' : `Reclassificado para "${conta.nome}"`);
 }
 
 /* =========================================================================
