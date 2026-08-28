@@ -835,6 +835,43 @@ tbody tr{transition:.12s} tbody tr:hover{background:var(--panel2)}
     <button class="btn btn-gold" onclick="gravarImport()">Importar selecionados</button></div>
 </div></div>
 
+<!-- ===================== Editar título ===================== -->
+<div class="overlay" id="ovTitulo"><div class="modal">
+  <div class="modal-head"><h3 id="tiTit">Editar título</h3><button class="modal-x" onclick="closeModal('ovTitulo')">×</button></div>
+  <div class="modal-body">
+    <input type="hidden" id="ti_id">
+    <div class="alert" id="ti_aviso" style="display:none"></div>
+    <div class="fgrid">
+      <div class="field"><label>Fonte</label><select id="ti_fonte"></select></div>
+      <div class="field"><label>Situação</label><input id="ti_status" disabled></div>
+    </div>
+    <div class="field"><label>Cliente</label><input id="ti_cliente" list="dlClientes" oninput="prev('ti_cliente','ti_cliPrev')"></div>
+    <div class="cprev" id="ti_cliPrev"></div>
+    <div class="fgrid">
+      <div class="field"><label>Sacado</label><input id="ti_sacado" list="dlSacados"></div>
+      <div class="field"><label>NF / documento</label><input id="ti_nf"></div>
+    </div>
+    <div class="fgrid">
+      <div class="field"><label>Data da operação</label><input type="date" id="ti_entrada"></div>
+      <div class="field"><label>Vencimento</label><input type="date" id="ti_venc"></div>
+    </div>
+    <div class="field"><label>Emissão</label><select id="ti_emissao"></select></div>
+    <div class="field"><label>Valor de face</label>
+      <input type="number" step="0.01" min="0.01" id="ti_valor" oninput="tiCalc()">
+      <div class="hint" id="ti_valorHint"></div></div>
+    <div class="memo" id="ti_memo"></div>
+    <div class="field" id="ti_ajusteWrap" style="display:none">
+      <label class="ac-check" style="margin:0"><input type="checkbox" id="ti_ajuste" checked onchange="tiCalc()">
+        <span>Lançar o ajuste automaticamente (recomendado). Sem ele, a conciliação fica com essa diferença
+        até você lançar a contrapartida à mão.</span></label></div>
+    <div class="field"><label>Observação</label><textarea id="ti_obs" rows="2"></textarea></div>
+    <div class="erro" id="ti_erro"></div>
+  </div>
+  <div class="modal-foot"><button class="btn btn-neg" onclick="excluirTitulo()">Excluir</button>
+    <button class="btn btn-ghost" onclick="closeModal('ovTitulo')">Cancelar</button>
+    <button class="btn btn-gold" onclick="salvarTitulo()">Salvar</button></div>
+</div></div>
+
 <!-- ===================== Confirmação ===================== -->
 <div class="overlay" id="ovConf"><div class="modal" style="max-width:440px">
   <div class="modal-head"><h3 id="cf_tit">Confirmar</h3><button class="modal-x" onclick="closeModal('ovConf')">×</button></div>
@@ -1667,7 +1704,7 @@ function acoesRazao(m) {
             <button class="iconbtn del" title="Excluir operação" onclick="excluirOper('${m.operacaoId}')">🗑</button>`;
   }
   if (m.tipo === 'ANTECIPACAO_ENVIO' && m.tituloId) {
-    if (!podeEditarAnt(m.tituloId)) return `<span class="muted" title="Antecipação já retornou">🔒</span>`;
+    if (!podeEditarAnt(m.tituloId)) return `<button class="iconbtn" title="Antecipação já retornou — dá para corrigir os dados" onclick="abrirTitulo('${m.tituloId}')">✎</button>`;
     return `<button class="iconbtn" title="Editar antecipação" onclick="abrirAnt('${m.tituloId}')">✎</button>
             <button class="iconbtn del" title="Excluir antecipação" onclick="excluirAnt('${m.tituloId}')">🗑</button>`;
   }
@@ -1725,7 +1762,8 @@ VIEWS.titulos = function () {
       <td class="num">${brl(t.valor)}</td>
       <td><span class="chip ${t.st === 'VENCIDO' ? 'chip-bad' : 'chip-n'}">${STATUS_LABEL[t.st]}</span></td>
       <td><div class="acoes">
-        ${t.operacaoId && podeEditarOper(t.operacaoId) ? `<button class="iconbtn" title="Editar operação" onclick="abrirOper('${t.operacaoId}')">✎</button>` : ''}
+        <button class="iconbtn" title="Editar título" onclick="abrirTitulo('${t.id}')">✎</button>
+        ${t.operacaoId && podeEditarOper(t.operacaoId) ? `<button class="iconbtn" title="Editar a operação inteira" onclick="abrirOper('${t.operacaoId}')">⧉</button>` : ''}
         <button class="btn btn-sm" title="Dar prazo novo e cobrar os juros do período" onclick="abrirProrrog('${t.id}')">Prorrogar</button>
         <button class="btn btn-sm btn-gold" onclick="abrirReceb('${t.id}')">Receber</button></div></td></tr>`).join('');
 
@@ -1795,7 +1833,7 @@ VIEWS.antecipacoes = function () {
       <td class="num">${t.dias > 0 ? `${brl(t.comJuros)}<div class="pos" style="font-size:10.5px">+${brl(t.jurosHoje)} · ${t.dias}d</div>` : '<span class="muted">—</span>'}</td>
       <td><span class="chip ${t.st === 'VENCIDO' ? 'chip-bad' : 'chip-n'}">${STATUS_LABEL[t.st]}</span></td>
       <td><div class="acoes">
-        ${podeEditarAnt(t.id) ? `<button class="iconbtn" title="Editar" onclick="abrirAnt('${t.id}')">✎</button>` : ''}
+        <button class="iconbtn" title="Editar antecipação" onclick="abrirTitulo('${t.id}')">✎</button>
         <button class="btn btn-sm" title="Adiar a data prevista de retorno" onclick="abrirProrrog('${t.id}')">Prorrogar</button>
         <button class="btn btn-sm btn-gold" onclick="abrirReceb('${t.id}')">Retorno</button></div></td></tr>`).join('');
 
@@ -1839,7 +1877,9 @@ VIEWS.recebidos = function () {
       <td>${fmtBR(t.dataReceb)}${t.atraso != null && t.atraso > 0 ? `<span class="chip chip-warn" style="margin-left:6px">+${t.atraso}d</span>` : ''}</td>
       <td class="num">${brl(t.valorRecebido)}</td>
       <td class="num">${t.desagio != null ? brl(t.desagio) : '<span class="muted">—</span>'}</td>
-      <td><div class="acoes"><button class="btn btn-sm" title="Volta para a vencer e remove a entrada lançada" onclick="desfazerBaixa('${t.id}')">↩ Desfazer</button></div></td></tr>`).join('');
+      <td><div class="acoes">
+        <button class="iconbtn" title="Corrigir cliente, sacado, NF ou datas" onclick="abrirTitulo('${t.id}')">✎</button>
+        <button class="btn btn-sm" title="Volta para a vencer e remove a entrada lançada" onclick="desfazerBaixa('${t.id}')">↩ Desfazer</button></div></td></tr>`).join('');
 
   return stats +
     `<div class="filters">${segFonte()}${campoBusca('receb', 'Buscar cliente, sacado, NF...')}</div>
@@ -3711,6 +3751,148 @@ VIEWS.fechamento = function () {
       <th class="num">Saldo no fim</th><th>Situação</th><th></th></tr></thead>
     <tbody>${linhas || '<tr><td colspan="6"><div class="empty">Nenhum mês com movimento.</div></td></tr>'}</tbody></table></div></div>`;
 };
+
+/* =========================================================================
+   Editar título (e antecipação já retornada)
+   ---------------------------------------------------------------------------
+   O ponto delicado aqui é o valor de face. Ele entra na conciliação pelo lado
+   dos títulos a vencer, e o montante não sabe disso. Mudar 10.000 para 12.000
+   aumenta o "na rua" em 2.000 sem que o patrimônio suba — e a conta para de
+   fechar. Por isso toda mudança de valor lança, junto, um ajuste de resultado
+   com a diferença: é o que um contador faria, fica visível no razão e mantém
+   saldo + títulos = montante.
+   ========================================================================= */
+const EMISSOES = [['EMITIDO', 'Emitido'], ['NAO_EMITIDO', 'Não emitido'], ['A_RECEBER', 'A receber'],
+['COTA', 'Cota'], ['NA', 'Não se aplica']];
+
+function abrirTitulo(id) {
+  const t = DB.titulos.find(x => x.id === id); if (!t) return;
+  // Antecipação em aberto tem editor próprio, com a memória de juros.
+  if (t.tipo === 'ANTECIPACAO' && emAberto(t)) return abrirAnt(id);
+  limpaErro('ti_erro');
+  const pago = t.status === 'PAGO';
+  el('tiTit').textContent = t.tipo === 'ANTECIPACAO' ? 'Editar antecipação' : 'Editar título';
+  setVal('ti_id', t.id);
+  el('ti_fonte').innerHTML = opcoesFonte(t.fonte);
+  el('ti_emissao').innerHTML = EMISSOES.map(([v, r]) => `<option value="${v}" ${t.emissao === v ? 'selected' : ''}>${esc(r)}</option>`).join('');
+  setVal('ti_status', pago ? `Baixado em ${fmtBR(t.dataReceb)} por ${brl(t.valorRecebido)}` : STATUS_LABEL[statusCalc(t)]);
+  setVal('ti_cliente', t.cliente); prev('ti_cliente', 'ti_cliPrev');
+  setVal('ti_sacado', t.sacado); setVal('ti_nf', t.nf);
+  setVal('ti_entrada', t.dataEntrada); setVal('ti_venc', t.dataVenc);
+  setVal('ti_valor', t.valor); setVal('ti_obs', t.obs);
+  el('ti_ajuste').checked = true;
+
+  // Um título pago já virou dinheiro no caixa: mexer no valor de face agora
+  // desencontraria os dois. O caminho é desfazer a baixa, corrigir e baixar
+  // de novo — os dados cadastrais continuam livres.
+  el('ti_valor').disabled = pago;
+  const lote = t.operacaoId ? titulosDaOper(t.operacaoId).length : 0;
+  const avisos = [];
+  if (pago) avisos.push('Este título já foi baixado, então o valor de face fica travado — ' +
+    'ele já bateu com o dinheiro que entrou. Para corrigir o valor, desfaça a baixa em <b>Recebidos</b>, ' +
+    'ajuste aqui e baixe de novo. Cliente, sacado, NF e datas continuam editáveis.');
+  if (lote > 1) avisos.push(`Este título faz parte de uma operação com <b>${lote} títulos</b>. ` +
+    'O valor bruto da operação não é recalculado ao mudar um título isolado — ' +
+    'para mexer no lote inteiro, edite a operação no Razão.');
+  el('ti_aviso').innerHTML = avisos.join('<br><br>');
+  el('ti_aviso').style.display = avisos.length ? 'block' : 'none';
+  el('ti_valorHint').textContent = pago ? 'Travado enquanto o título estiver baixado.'
+    : 'Mudar o valor lança um ajuste automático, para a conciliação continuar fechando.';
+  tiCalc();
+  openModal('ovTitulo'); setTimeout(() => el('ti_cliente').focus(), 60);
+}
+
+/* Mostra, antes de salvar, exatamente o que a mudança de valor vai fazer. */
+function tiCalc() {
+  const t = DB.titulos.find(x => x.id === val('ti_id')), box = el('ti_memo'), wrap = el('ti_ajusteWrap');
+  if (!t) return;
+  const novo = num(val('ti_valor')), dif = +(novo - t.valor).toFixed(2);
+  if (t.status === 'PAGO' || !isFinite(novo) || Math.abs(dif) < .005) {
+    box.classList.remove('show'); wrap.style.display = 'none'; return;
+  }
+  const comAjuste = el('ti_ajuste').checked;
+  const conta = contaPorChave(dif > 0 ? 'receita_ajuste' : 'despesa_ajuste');
+  box.innerHTML = `
+    <div class="l"><span>Valor de face</span><span>${brl(t.valor)} → ${brl(novo)}</span></div>
+    <div class="l"><span>Diferença</span><span class="${dif < 0 ? 'neg' : 'pos'}">${brl(dif)}</span></div>
+    <div class="l tot"><span>${comAjuste ? 'Ajuste que será lançado' : 'Diferença que sobra na conciliação'}</span>
+      <span class="${comAjuste ? '' : 'neg'}">${brl(comAjuste ? dif : dif)}</span></div>
+    <div class="conta">${comAjuste
+      ? `Entra no razão como "${esc(conta ? conta.nome : 'Ajuste')}" em ${fmtBR(hoje())}, sem passar pelo caixa. Saldo + títulos continua batendo com o montante.`
+      : 'Sem o ajuste, o montante não acompanha e a conciliação passa a acusar essa diferença.'}</div>`;
+  box.classList.add('show');
+  wrap.style.display = 'block';
+}
+
+function salvarTitulo() {
+  limpaErro('ti_erro');
+  const t = DB.titulos.find(x => x.id === val('ti_id'));
+  if (!t) return erro('ti_erro', 'Título não encontrado.');
+  const pago = t.status === 'PAGO';
+  const cliente = val('ti_cliente').trim(), sacado = val('ti_sacado').trim();
+  const entrada = val('ti_entrada'), venc = val('ti_venc');
+  const novoValor = pago ? t.valor : num(val('ti_valor'));
+  if (!cliente) return erro('ti_erro', 'Informe o cliente.');
+  if (!entrada) return erro('ti_erro', 'Informe a data da operação.');
+  if (!pago && !(novoValor > 0)) return erro('ti_erro', 'Informe um valor de face válido.');
+  if (venc && entrada && venc < entrada) return erro('ti_erro', 'O vencimento não pode ser antes da data da operação.');
+
+  const dif = +(novoValor - t.valor).toFixed(2);
+  const lancaAjuste = !pago && Math.abs(dif) >= .005 && el('ti_ajuste').checked;
+  if (lancaAjuste && mesFechado(mesDe(hoje())))
+    return erro('ti_erro', `${mesLabel(mesDe(hoje()))} está fechado, e o ajuste precisa de uma data aberta. Reabra o mês em Fechamento.`);
+
+  Object.assign(t, {
+    fonte: val('ti_fonte'), cliente, sacado, nf: val('ti_nf').trim(),
+    emissao: val('ti_emissao'), dataEntrada: entrada, dataVenc: venc || null,
+    valor: novoValor, obs: val('ti_obs').trim()
+  });
+  garantirCliente(cliente); garantirSacado(sacado);
+
+  if (lancaAjuste) {
+    const conta = contaPorChave(dif > 0 ? 'receita_ajuste' : 'despesa_ajuste');
+    DB.movs.push({
+      id: uid(), seq: proximaSeq(), fonte: t.fonte, data: hoje(), tipo: 'AJUSTE',
+      descricao: `Ajuste no título ${cliente}${t.nf ? ' — NF ' + t.nf : ''} (${brl(t.valor - dif)} → ${brl(novoValor)})`,
+      cliente, tituloId: t.id, operacaoId: null,
+      // não passa pelo caixa: só o patrimônio acompanha a mudança do título
+      entrada: null, saida: null, resultado: dif,
+      contaId: conta ? conta.id : null, servico: null, obs: 'Contrapartida da edição do título', deletedAt: null
+    });
+  }
+  save(); closeModal('ovTitulo'); render();
+  toast(lancaAjuste ? `Título salvo — ajuste de ${brl(dif)} lançado` : 'Título salvo');
+}
+
+function excluirTitulo() {
+  const t = DB.titulos.find(x => x.id === val('ti_id')); if (!t) return;
+  if (t.status === 'PAGO')
+    return erro('ti_erro', 'Título baixado não pode ser excluído. Desfaça a baixa em Recebidos primeiro.');
+  const temEnvio = movs().some(m => m.tituloId === t.id && m.tipo === 'ANTECIPACAO_ENVIO');
+  // Antecipação com envio no razão já tem contrapartida: some o título e some a
+  // saída de caixa, e a conta continua fechando sozinha. Título avulso, não —
+  // ele sai do "na rua" sem que nada compense, então precisa do ajuste.
+  const msg = temEnvio
+    ? `Excluir a antecipação de ${brl(t.valor)} para ${t.cliente}? O envio no razão sai junto, e a conciliação continua fechando.`
+    : `Excluir o título de ${brl(t.valor)} de ${t.cliente}? Ele sai do "na rua", então será lançado um ajuste de ${brl(-t.valor)} no razão como contrapartida — sem isso a conciliação passaria a acusar essa diferença.`;
+  confirmar(msg, () => {
+    const ts = Date.now();
+    t.deletedAt = ts;
+    if (temEnvio) {
+      DB.movs.forEach(m => { if (m.tituloId === t.id && m.tipo === 'ANTECIPACAO_ENVIO') m.deletedAt = ts; });
+    } else {
+      const conta = contaPorChave('despesa_ajuste');
+      DB.movs.push({
+        id: uid(), seq: proximaSeq(), fonte: t.fonte, data: hoje(), tipo: 'AJUSTE',
+        descricao: `Baixa do título ${t.cliente}${t.nf ? ' — NF ' + t.nf : ''} (${brl(t.valor)})`,
+        cliente: t.cliente, tituloId: null, operacaoId: null,
+        entrada: null, saida: null, resultado: -t.valor,
+        contaId: conta ? conta.id : null, servico: null, obs: 'Contrapartida da exclusão do título', deletedAt: null
+      });
+    }
+    save(); closeModal('ovTitulo'); render(); toast('Título movido para Excluídos');
+  }, 'Excluir título');
+}
 
 /* =========================================================================
    Backup e gravação do arquivo
