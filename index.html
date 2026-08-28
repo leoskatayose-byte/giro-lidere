@@ -574,7 +574,7 @@ tbody tr{transition:.12s} tbody tr:hover{background:var(--panel2)}
     <div class="side-foot">
       <div class="temas" id="temas"></div>
       <div class="tema-nome" id="temaNome"></div>
-      <button class="lnk" onclick="salvarArquivo()">⤓ Salvar arquivo do sistema</button>
+      <button class="lnk" id="btnSalvarArquivo" onclick="salvarArquivo()">⤓ Salvar arquivo do sistema</button>
       <button class="lnk" onclick="exportData()">↓ Baixar backup (JSON)</button>
       <button class="lnk" onclick="importData()">↑ Restaurar backup</button>
     </div>
@@ -3730,6 +3730,10 @@ function importData() {
 /* Gera um HTML novo com os dados de agora embutidos — o jeito de continuar
    trabalhando a partir do arquivo mais recente, sem depender do navegador. */
 function salvarArquivo() {
+  // Na nuvem esse arquivo sairia com os dados da empresa dentro — e é
+  // exatamente o que não pode existir, já que uma cópia dele pode acabar
+  // publicada. Lá o backup é o JSON, e a fonte da verdade é o banco.
+  if (MODO_NUVEM) return toast('Na nuvem use "Baixar backup (JSON)" — o arquivo do sistema é só da versão local');
   const json = JSON.stringify(DB).split('</script').join('<\\/script');
   const html = SHELL_HTML.replace(
     /(<script type="application\/json" id="seed">)[\s\S]*?(<\/script>)/,
@@ -3977,6 +3981,8 @@ function excluirMinhaConta() {
 
 /* ---------- Início ---------- */
 (async function iniciarNuvem() {
+  const btn = document.getElementById('btnSalvarArquivo');
+  if (btn) btn.remove();   // ver salvarArquivo(): na nuvem esse arquivo levaria os dados junto
   sb = window.supabase.createClient(SB_URL, SB_KEY, {
     auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
   });
