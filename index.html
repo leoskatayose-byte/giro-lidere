@@ -927,7 +927,7 @@ let razaoAdd = false;       // linha "adicionar" do Razão está aberta?
 const busca = { titulos: '', ant: '', receb: '', razao: '', clientes: '', sacados: '', contas: '' };
 const ordem = {
   titulos: { k: 'dataVenc', d: 'asc' }, ant: { k: 'dataVenc', d: 'asc' },
-  receb: { k: 'dataReceb', d: 'desc' }, razao: { k: 'data', d: 'desc' }
+  receb: { k: 'dataReceb', d: 'desc' }, razao: { k: 'data', d: 'asc' }
 };
 const cpFiltro = { status: 'pendentes', contrato: 'todos' };   // abre no que ainda vai vencer
 const graficoAberto = {};
@@ -952,6 +952,9 @@ function migrar() {
   DB.config = DB.config || {}; if (typeof DB.config.taxaAntecipacao !== 'number') DB.config.taxaAntecipacao = 4;
   ['clientes', 'sacados', 'planoContas', 'titulos', 'movs'].forEach(k => { if (!Array.isArray(DB[k])) DB[k] = []; });
   if (!Array.isArray(DB.fechados)) DB.fechados = [];
+  // Arquivo/base de antes da sequência: o array já está na ordem da planilha,
+  // então o índice reconstrói a ordem certa sem precisar adivinhar nada.
+  if (DB.movs.some(m => !m.seq)) DB.movs.forEach((m, i) => { if (!m.seq) m.seq = i + 1; });
   DB.capitalGiro = DB.capitalGiro || { banco: 'Banco Bradesco', contratos: [], parcelas: [] };
   DB.titulos.forEach(t => { if (t.deletedAt === undefined) t.deletedAt = null; });
   DB.movs.forEach(m => { if (m.deletedAt === undefined) m.deletedAt = null; });
@@ -974,6 +977,9 @@ function save() { try { localStorage.setItem(KEY, JSON.stringify(DB)); } catch (
 /* Atalhos para as listas vivas — nada apagado aparece em tela. */
 const tits = () => alive(DB.titulos);
 const movs = () => alive(DB.movs);
+/* Ordem de lançamento dentro do mesmo dia. Cresce sempre, inclusive sobre o
+   que foi excluído — assim um lançamento novo nunca cai no meio do histórico. */
+const proximaSeq = () => DB.movs.reduce((m, x) => Math.max(m, x.seq || 0), 0) + 1;
 const contas = () => alive(DB.planoContas);
 const clientes = () => alive(DB.clientes);
 const sacados = () => alive(DB.sacados);
@@ -1091,7 +1097,10 @@ function razaoDoMes(mk, fs) {
   let sd = fs.reduce((s, f) => s + saldo(f, dAnterior), 0);
   let mo = fs.reduce((s, f) => s + montante(f, dAnterior), 0);
   const linhas = movs().filter(m => fs.includes(m.fonte) && mesDe(m.data) === mk)
-    .sort((a, b) => a.data === b.data ? String(a.id).localeCompare(String(b.id)) : (a.data < b.data ? -1 : 1))
+    // Desempate do mesmo dia pela SEQUÊNCIA de lançamento, não pelo id: o id é
+    // UUID e ordenaria por texto, o que embaralharia lançamentos do mesmo dia.
+    // A sequência veio da planilha e é o que faz o saldo correr na ordem certa.
+    .sort((a, b) => a.data === b.data ? (a.seq || 0) - (b.seq || 0) : (a.data < b.data ? -1 : 1))
     .map(m => {
       const valor = (m.entrada || 0) - (m.saida || 0);
       sd += valor; if (m.resultado) mo += m.resultado;
@@ -1404,7 +1413,10 @@ function ordena(lista, o) {
   return [...lista].sort((a, b) => {
     let x = a[o.k], y = b[o.k];
     if (num.includes(o.k)) { x = Number(x || 0); y = Number(y || 0); } else { x = String(x ?? ''); y = String(y ?? ''); }
-    const c = x < y ? -1 : x > y ? 1 : 0;
+    let c = x < y ? -1 : x > y ? 1 : 0;
+    // Empate na data cai na sequência de lançamento, para o mesmo dia sair
+    // sempre na mesma ordem — e na ordem em que as coisas aconteceram.
+    if (!c && a.seq != null && b.seq != null) c = a.seq - b.seq;
     return o.d === 'asc' ? c : -c;
   });
 }
@@ -2456,7 +2468,7 @@ function salvarLanc() {
   };
   const id = val('lc_id');
   if (id) Object.assign(DB.movs.find(x => x.id === id), dados);
-  else DB.movs.push({ id: uid(), tituloId: null, operacaoId: null, deletedAt: null, ...dados });
+  else DB.movs.push({ id: uid(), seq: proximaSeq(), tituloId: null, operacaoId: null, deletedAt: null, ...dados });
   garantirCliente(cli);
   save(); closeModal('ovLanc'); render(); toast(id ? 'Lançamento atualizado' : 'Lançamento registrado');
 }
@@ -2562,7 +2574,7 @@ function salvarOper() {
   const desc = `Operação ${cli}${nfs ? ' — NF ' + nfs : ''} (${linhas.length} título${linhas.length > 1 ? 's' : ''})`;
   const dados = { fonte, data, descricao: desc, cliente: cli, tituloId: ultimo, entrada: null, saida: liq, resultado: bruto - liq };
   if (editando) Object.assign(DB.movs.find(m => m.operacaoId === editando && m.tipo === 'OPERACAO'), dados);
-  else DB.movs.push({ id: uid(), tipo: 'OPERACAO', operacaoId: opId, contaId: null, servico: null, obs: '', deletedAt: null, ...dados });
+  else DB.movs.push({ id: uid(), seq: proximaSeq(), tipo: 'OPERACAO', operacaoId: opId, contaId: null, servico: null, obs: '', deletedAt: null, ...dados });
   garantirCliente(cli);
   save(); closeModal('ovOper'); render();
   toast(`${editando ? 'Operação atualizada' : 'Operação registrada'} — deságio de ${brl(bruto - liq)}`);
@@ -2636,7 +2648,7 @@ function salvarAnt() {
       numAntecipacao: numero, taxaMensal: taxa, deletedAt: null
     });
     DB.movs.push({
-      id: uid(), fonte, data: envio, tipo: 'ANTECIPACAO_ENVIO', descricao: desc, cliente: cli,
+      id: uid(), seq: proximaSeq(), fonte, data: envio, tipo: 'ANTECIPACAO_ENVIO', descricao: desc, cliente: cli,
       tituloId: tid, operacaoId: null, entrada: null, saida: v, resultado: null,
       contaId: null, servico: null, obs: '', deletedAt: null
     });
@@ -2705,7 +2717,7 @@ function salvarReceb() {
   t.status = 'PAGO'; t.dataReceb = data; t.valorRecebido = v;
   if (obs) t.obs = (t.obs ? t.obs + ' | ' : '') + obs;
   DB.movs.push({
-    id: uid(), fonte: t.fonte, data, tipo: ant ? 'ANTECIPACAO_RETORNO' : 'RECEBIMENTO',
+    id: uid(), seq: proximaSeq(), fonte: t.fonte, data, tipo: ant ? 'ANTECIPACAO_RETORNO' : 'RECEBIMENTO',
     descricao: ant ? `Retorno da ${numAntLabel(t.numAntecipacao)} — ${t.cliente}` : `Recebimento ${t.cliente} — NF ${t.nf || 's/nº'}`,
     cliente: t.cliente, tituloId: t.id, operacaoId: null, entrada: v, saida: null,
     resultado: dif ? dif : null, contaId: null, servico: null, obs: '', deletedAt: null
@@ -2962,7 +2974,7 @@ function salvarProrrog() {
   if (j > 0) {
     const desc = `Prorrogação ${t.cliente}${t.nf ? ' — NF ' + t.nf : ''} (${dias} dia(s))`;
     const comum = {
-      id: uid(), fonte: t.fonte, data: dataJuro, tipo: 'PRORROGACAO', cliente: t.cliente,
+      id: uid(), seq: proximaSeq(), fonte: t.fonte, data: dataJuro, tipo: 'PRORROGACAO', cliente: t.cliente,
       tituloId: t.id, operacaoId: null, resultado: j, contaId: null, servico: null, obs: '', deletedAt: null
     };
     if (forma === 'TITULO') {
@@ -3506,7 +3518,7 @@ function gravarImport() {
   sel.forEach(x => {
     const conta = contaPorId(x.contaId), ent = x.valor > 0;
     DB.movs.push({
-      id: uid(), fonte: imp.fonte, data: x.data, tipo: tipoPorGrupo(conta.grupo),
+      id: uid(), seq: proximaSeq(), fonte: imp.fonte, data: x.data, tipo: tipoPorGrupo(conta.grupo),
       descricao: x.desc, cliente: '', tituloId: null, operacaoId: null,
       entrada: ent ? x.valor : null, saida: ent ? null : Math.abs(x.valor),
       // do extrato o valor inteiro afeta o resultado, a não ser que a conta seja
