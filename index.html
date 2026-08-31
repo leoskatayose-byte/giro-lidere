@@ -1199,6 +1199,7 @@ function migrar() {
   DB.planoContas.forEach(c => { if (!c.servico) c.servico = 'AMBOS'; });
   if (typeof DB.config.taxaProrrogacao !== 'number') DB.config.taxaProrrogacao = 5;
   DB.config.baseProrrogacao = DB.config.baseProrrogacao === 'PERIODO' ? 'PERIODO' : 'MES';
+  if (typeof DB.config.jurosCompostos !== 'boolean') DB.config.jurosCompostos = true;
   if (typeof DB.config.tarifaProrrogacao !== 'number') DB.config.tarifaProrrogacao = 5;
   DB.config.tarifaPagaPor = DB.config.tarifaPagaPor === 'BANCO' ? 'BANCO' : 'CLIENTE';
   // resíduo de seções que saíram do app
@@ -1358,9 +1359,31 @@ function razaoDoMes(mk, fs) {
    em reais, então mora num lugar só e todo mundo chama daqui. ===== */
 const taxaPadrao = () => (typeof DB.config.taxaAntecipacao === 'number' && isFinite(DB.config.taxaAntecipacao)) ? DB.config.taxaAntecipacao : 4;
 const taxaDa = t => (t && typeof t.taxaMensal === 'number' && isFinite(t.taxaMensal)) ? t.taxaMensal : taxaPadrao();
-function juros(valor, taxa, dias) {
+/* ===== Juros compostos dia a dia =====
+   É o modelo das planilhas de correção: o saldo de ontem rende hoje, e o juro
+   de hoje passa a render amanhã. A taxa mensal vira taxa diária dividida por
+   30, e o fator é (1 + taxa/30) elevado aos dias corridos.
+
+   Numa antecipação de 30.094,90 a 5% ao mês, 392 dias dão R$ 27.714,14 no
+   composto contra R$ 19.662,00 no simples: em prazo longo a diferença não é
+   detalhe. O simples continua disponível na configuração para quem tiver
+   contrato escrito assim. */
+const jurosCompostos = () => DB.config.jurosCompostos !== false;
+function fatorJuros(taxa, dias, compostos) {
+  const i = (taxa / 100) / 30;
+  return (compostos === undefined ? jurosCompostos() : compostos)
+    ? Math.pow(1 + i, dias) - 1
+    : i * dias;
+}
+function juros(valor, taxa, dias, compostos) {
   if (!valor || !taxa || !dias || dias <= 0) return 0;
-  return valor * (taxa / 100) / 30 * dias;
+  return valor * fatorJuros(taxa, dias, compostos);
+}
+/* A conta escrita por extenso, para a tela não pedir fé. */
+function contaJuros(valor, taxa, dias, resultado) {
+  return jurosCompostos()
+    ? `${brl(valor)} × (1 + ${fmtTaxa(taxa)}%÷30)^${dias} − ${brl(valor)} = ${brl(resultado)} · compostos dia a dia`
+    : `${brl(valor)} × ${fmtTaxa(taxa)}% ÷ 30 × ${dias} = ${brl(resultado)} · juros simples`;
 }
 function projecao(t, ate) {
   const taxa = taxaDa(t), fim = ate || t.dataVenc || hoje();
@@ -1546,7 +1569,8 @@ const tarifaPagaPor = () => DB.config.tarifaPagaPor === 'BANCO' ? 'BANCO' : 'CLI
 const taxaProrrogacao = () => (typeof DB.config.taxaProrrogacao === 'number' && isFinite(DB.config.taxaProrrogacao)) ? DB.config.taxaProrrogacao : 5;
 function jurosProrrogacao(valor, taxa, dias, base) {
   if (!valor || !taxa || !dias || dias <= 0) return 0;
-  return base === 'PERIODO' ? valor * (taxa / 100) : valor * (taxa / 100) / 30 * dias;
+  // 'PERIODO' é taxa cheia, sem repartir por dia — não há o que compor.
+  return base === 'PERIODO' ? valor * (taxa / 100) : juros(valor, taxa, dias);
 }
 /* Um título só entra em prorrogação se ainda está na rua. */
 const podeProrrogar = t => !!t && emAberto(t);
@@ -2469,7 +2493,14 @@ VIEWS.cadastros = function () {
         <option value="CLIENTE" ${tarifaPagaPor() === 'CLIENTE' ? 'selected' : ''}>cobrada do cliente</option>
         <option value="BANCO" ${tarifaPagaPor() === 'BANCO' ? 'selected' : ''}>custo do banco</option>
       </select>
-      <button class="btn btn-sm" onclick="salvarTaxas()">Salvar taxas</button></div></div>`;
+      <button class="btn btn-sm" onclick="salvarTaxas()">Salvar taxas</button></div>
+    <div class="filters" style="margin:0 14px 14px">
+      <label style="font-size:12.5px;color:var(--dim)">Regime de juros</label>
+      <select id="cfgRegime" style="max-width:330px">
+        <option value="COMPOSTO" ${jurosCompostos() ? 'selected' : ''}>Compostos dia a dia — o juro de hoje rende amanhã</option>
+        <option value="SIMPLES" ${jurosCompostos() ? '' : 'selected'}>Simples — sempre sobre o valor original</option>
+      </select>
+      <span class="hint" style="margin:0">Vale para antecipação, apropriação e prorrogação ao mês.</span></div></div>`;
 
   const stats = `<div class="stats">
     <div class="stat"><div class="k">Clientes</div><div class="v">${cli.length}</div><div class="sub">quem envia os títulos</div></div>
@@ -2969,7 +3000,7 @@ function atCalc() {
   box.innerHTML = `<div class="l"><span>Prazo previsto</span><span>${dias} dia(s)</span></div>
     <div class="l"><span>Juros a ${fmtTaxa(taxa)}% ao mês${bruto === '' ? ' (padrão)' : ''}</span><span>${brl(j)}</span></div>
     <div class="l tot"><span>Retorno previsto</span><span>${brl(v + j)}</span></div>
-    <div class="conta">${brl(v)} × ${fmtTaxa(taxa)}% ÷ 30 × ${dias} = ${brl(j)}</div>`;
+    <div class="conta">${contaJuros(v, taxa, dias, j)}</div>`;
   box.classList.add('show');
   atAvisoCaixa();
 }
@@ -3136,7 +3167,7 @@ function rcCalc(preencher) {
     <div class="l"><span>Prazo desde o último acerto</span><span>${p.dias} dia(s)</span></div>
     <div class="l"><span>Juros a ${fmtTaxa(p.taxa)}% ao mês</span><span>${brl(p.juros)}</span></div>
     <div class="l tot"><span>${cap ? 'Devolução calculada' : 'Retorno calculado'}</span><span>${brl(p.total)}</span></div>
-    <div class="conta">${brl(t.valor)} × ${fmtTaxa(p.taxa)}% ÷ 30 × ${p.dias} = ${brl(p.juros)}</div>
+    <div class="conta">${contaJuros(t.valor, p.taxa, p.dias, p.juros)}</div>
     ${p.dias < 0 ? `<div class="neg" style="margin-top:6px">A data está antes de ${fmtBR(p.desde)}.</div>` : ''}
     ${difere ? `<div style="margin-top:8px"><button class="btn btn-sm" onclick="rcUsarCalculado(${p.total.toFixed(2)})">Usar o valor calculado (${brl(p.total)})</button></div>` : ''}`;
   box.classList.add('show');
@@ -3278,7 +3309,9 @@ function salvarTaxas() {
   DB.config.baseProrrogacao = val('cfgBasePr');
   DB.config.tarifaProrrogacao = tf;
   DB.config.tarifaPagaPor = val('cfgTarifaQuem');
-  save(); render(); toast(`Antecipação ${fmtTaxa(a)}% ao mês · prorrogação ${fmtTaxa(pr)}% + ${brl(tf)}`);
+  DB.config.jurosCompostos = val('cfgRegime') !== 'SIMPLES';
+  save(); render();
+  toast(`Antecipação ${fmtTaxa(a)}% ao mês · prorrogação ${fmtTaxa(pr)}% + ${brl(tf)} · juros ${jurosCompostos() ? 'compostos' : 'simples'}`);
 }
 /* Formata o documento enquanto digita e avisa se os dígitos não fecham —
    avisa, não bloqueia: às vezes o número chega errado e o nome precisa entrar. */
@@ -3480,7 +3513,7 @@ function prCalc(soMemoria) {
   const jf = +(total - (tf.quem === 'CLIENTE' ? tf.valor : 0)).toFixed(2);
   const conta = base === 'PERIODO'
     ? `${brl(t.valor)} × ${fmtTaxa(taxa)}% = ${brl(j)}`
-    : `${brl(t.valor)} × ${fmtTaxa(taxa)}% ÷ 30 × ${dias} = ${brl(j)}`;
+    : contaJuros(t.valor, taxa, dias, j);
   box.innerHTML = `
     <div class="l"><span>De ${fmtBR(t.dataVenc)} para ${fmtBR(nova)}</span><span>${dias} dia(s)</span></div>
     <div class="l"><span>Juros ${fmtTaxa(taxa)}%${base === 'PERIODO' ? ' no período' : ' ao mês, proporcional'}</span><span>${brl(jf)}</span></div>
