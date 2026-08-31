@@ -763,7 +763,7 @@ tbody tr{transition:.12s} tbody tr:hover{background:var(--panel2)}
     <div class="fgrid">
       <div class="field"><label>Nova data de vencimento</label>
         <input type="date" id="pr_novaData" oninput="prCalc()" onchange="prCalc()"></div>
-      <div class="field"><label>Taxa (%)</label>
+      <div class="field"><label>Taxa de juros (% sobre o título)</label>
         <input type="number" step="0.01" min="0" id="pr_taxa" oninput="prCalc()"></div>
     </div>
     <div class="field"><label>Base da taxa</label>
@@ -773,18 +773,19 @@ tbody tr{transition:.12s} tbody tr:hover{background:var(--panel2)}
       </select>
       <div class="hint">A primeira é a mesma convenção usada nas antecipações.</div></div>
     <div class="memo" id="pr_memo"></div>
-    <div class="field"><label>Juros a cobrar</label><input type="number" step="0.01" min="0" id="pr_juros" oninput="prEditado()">
-      <div class="hint">Vem do cálculo, mas continua editável — nem toda prorrogação sai pela tabela.</div></div>
-    <div class="field"><label>Tarifa de prorrogação</label>
+    <div class="field"><label>Tarifa de prorrogação (R$ por prorrogação)</label>
       <div class="fgrid">
-        <div><input type="number" step="0.01" min="0" id="pr_tarifa" oninput="prCalc(true)"></div>
-        <div><select id="pr_tarifaQuem" onchange="prCalc(true)">
+        <div><input type="number" step="0.01" min="0" id="pr_tarifa" oninput="prCalc()"
+          placeholder="valor fixo em reais"></div>
+        <div><select id="pr_tarifaQuem" onchange="prCalc()">
           <option value="CLIENTE">Cobrada do cliente (entra)</option>
           <option value="BANCO">Custo do banco (sai)</option>
           <option value="NAO">Sem tarifa nesta prorrogação</option>
         </select></div>
       </div>
       <div class="hint" id="pr_tarifaHint"></div></div>
+    <div class="field"><label id="pr_jurosLbl">Total a cobrar</label><input type="number" step="0.01" min="0" id="pr_juros" oninput="prEditado()">
+      <div class="hint" id="pr_jurosHint">Vem do cálculo, mas continua editável — nem toda prorrogação sai pela tabela.</div></div>
     <div class="field"><label>Como entra o juro</label>
       <select id="pr_forma">
         <option value="CAIXA">Recebido agora (entra no caixa)</option>
@@ -2434,13 +2435,13 @@ VIEWS.cadastros = function () {
     <div class="filters" style="margin:0">
       <label style="font-size:12.5px;color:var(--dim)">Antecipação (% ao mês)</label>
       <input type="number" step="0.01" min="0" id="cfgTaxa" value="${taxaPadrao()}" style="max-width:100px">
-      <label style="font-size:12.5px;color:var(--dim);margin-left:8px">Prorrogação (%)</label>
+      <label style="font-size:12.5px;color:var(--dim);margin-left:8px">Juros de prorrogação (%)</label>
       <input type="number" step="0.01" min="0" id="cfgTaxaPr" value="${taxaProrrogacao()}" style="max-width:100px">
       <select id="cfgBasePr" style="max-width:230px">
         <option value="MES" ${DB.config.baseProrrogacao === 'MES' ? 'selected' : ''}>ao mês, proporcional aos dias</option>
         <option value="PERIODO" ${DB.config.baseProrrogacao === 'PERIODO' ? 'selected' : ''}>cheia no período</option>
       </select>
-      <label style="font-size:12.5px;color:var(--dim);margin-left:8px">Tarifa por prorrogação (R$)</label>
+      <label style="font-size:12.5px;color:var(--dim);margin-left:8px">Tarifa fixa por prorrogação (R$)</label>
       <input type="number" step="0.01" min="0" id="cfgTarifaPr" value="${tarifaProrrogacao()}" style="max-width:100px">
       <select id="cfgTarifaQuem" style="max-width:190px">
         <option value="CLIENTE" ${tarifaPagaPor() === 'CLIENTE' ? 'selected' : ''}>cobrada do cliente</option>
@@ -3444,36 +3445,49 @@ function prCalc(soMemoria) {
     return;
   }
   const j = jurosProrrogacao(t.valor, taxa, dias, base);
-  if (!soMemoria && !prEditadoAMao) setVal('pr_juros', j.toFixed(2));
-  const informado = num(val('pr_juros'));
-  const difere = isFinite(informado) && Math.abs(informado - j) > .005;
   const tf = prTarifa();
+  // A tarifa fixa entra DENTRO do que se cobra: juros de 154,15 mais R$ 5,00
+  // viram uma cobrança de 159,15, não duas cobranças separadas. Só quando ela
+  // é custo do banco é que fica de fora — aí quem paga é a empresa.
+  const cobrado = +(j + (tf.quem === 'CLIENTE' ? tf.valor : 0)).toFixed(2);
+  if (!soMemoria && !prEditadoAMao) setVal('pr_juros', cobrado.toFixed(2));
+  const informado = num(val('pr_juros'));
+  const total = isFinite(informado) ? informado : cobrado;
+  const difere = isFinite(informado) && Math.abs(informado - cobrado) > .005;
+  // o que sobra depois da tarifa é o juro propriamente dito
+  const jf = +(total - (tf.quem === 'CLIENTE' ? tf.valor : 0)).toFixed(2);
   const conta = base === 'PERIODO'
     ? `${brl(t.valor)} × ${fmtTaxa(taxa)}% = ${brl(j)}`
     : `${brl(t.valor)} × ${fmtTaxa(taxa)}% ÷ 30 × ${dias} = ${brl(j)}`;
-  const jf = isFinite(informado) ? informado : j;
   box.innerHTML = `
     <div class="l"><span>De ${fmtBR(t.dataVenc)} para ${fmtBR(nova)}</span><span>${dias} dia(s)</span></div>
-    <div class="l"><span>Taxa ${fmtTaxa(taxa)}%${base === 'PERIODO' ? ' no período' : ' ao mês, proporcional'}</span><span>${brl(j)}</span></div>
-    ${tf.valor ? `<div class="l"><span>Tarifa ${tf.quem === 'BANCO' ? 'do banco' : 'cobrada do cliente'}</span>
+    <div class="l"><span>Juros ${fmtTaxa(taxa)}%${base === 'PERIODO' ? ' no período' : ' ao mês, proporcional'}</span><span>${brl(jf)}</span></div>
+    ${tf.valor ? `<div class="l"><span>Tarifa fixa ${tf.quem === 'BANCO' ? '— custo do banco' : 'da prorrogação'}</span>
       <span class="${tf.quem === 'BANCO' ? 'neg' : 'pos'}">${brl(tf.quem === 'BANCO' ? -tf.valor : tf.valor)}</span></div>` : ''}
-    <div class="l"><span>Título + juros</span><span>${brl(t.valor + jf)}</span></div>
-    <div class="l tot"><span>Efeito no resultado</span>
-      <span class="${jf + tf.efeito < 0 ? 'neg' : 'pos'}">${brl(jf + tf.efeito)}</span></div>
-    <div class="conta">${conta}</div>
-    ${difere ? `<div style="margin-top:8px"><button type="button" class="btn btn-sm" onclick="prUsarCalculado(${j.toFixed(2)})">Usar o valor calculado (${brl(j)})</button></div>` : ''}`;
+    <div class="l tot"><span>${tf.quem === 'BANCO' && tf.valor ? 'Cobrado do cliente' : 'Total a cobrar'}</span><span class="pos">${brl(total)}</span></div>
+    ${tf.quem === 'BANCO' && tf.valor ? `<div class="l"><span>Efeito no resultado, já com a tarifa</span>
+      <span class="${total - tf.valor < 0 ? 'neg' : 'pos'}">${brl(total - tf.valor)}</span></div>` : ''}
+    <div class="l"><span>Título + o que for somado</span><span>${brl(t.valor + total)}</span></div>
+    <div class="conta">${conta}${tf.quem === 'CLIENTE' && tf.valor ? ` &nbsp;+&nbsp; tarifa fixa ${brl(tf.valor)} = ${brl(cobrado)}` : ''}</div>
+    ${difere ? `<div style="margin-top:8px"><button type="button" class="btn btn-sm" onclick="prUsarCalculado(${cobrado.toFixed(2)})">Usar o valor calculado (${brl(cobrado)})</button></div>` : ''}`;
   box.classList.add('show');
+  const lbl = el('pr_jurosLbl'), hint = el('pr_jurosHint');
+  if (lbl) lbl.textContent = tf.quem === 'CLIENTE' && tf.valor ? 'Total a cobrar (juros + tarifa)' : 'Juros a cobrar';
+  if (hint) hint.innerHTML = tf.quem === 'CLIENTE' && tf.valor
+    ? `Juros de ${brl(j)} mais a tarifa fixa de ${brl(tf.valor)}. Editável — o que passar da tarifa conta como juros.`
+    : 'Vem do cálculo, mas continua editável — nem toda prorrogação sai pela tabela.';
 }
 /* A tarifa é um valor fixo, não uma taxa: R$ 5,00 por prorrogação, some ou
    não o prazo. Vem preenchida do padrão e continua editável, porque nem toda
    prorrogação carrega tarifa. */
 function prTarifa() {
   const quem = val('pr_tarifaQuem'), v = quem === 'NAO' ? 0 : Math.max(0, num(val('pr_tarifa')) || 0);
+  if (el('pr_tarifa')) el('pr_tarifa').disabled = quem === 'NAO';
   const hint = el('pr_tarifaHint');
   if (hint) hint.innerHTML = !v ? 'Sem tarifa nesta prorrogação.'
     : quem === 'BANCO'
-      ? `<b>${brl(v)}</b> de custo: sai do caixa junto com a prorrogação e entra como Tarifas Bancárias.`
-      : `<b>${brl(v)}</b> cobrados do cliente junto com os juros, na mesma conta de Receita com Prorrogação.`;
+      ? `<b>${brl(v)}</b> fixos por prorrogação, não percentual: saem do caixa e entram como Tarifas Bancárias.`
+      : `<b>${brl(v)}</b> fixos por prorrogação, não percentual — cobrados do cliente junto com os juros, na conta de Receita com Prorrogação.`;
   return { valor: v, quem, efeito: quem === 'BANCO' ? -v : v };
 }
 function prUsarCalculado(v) { setVal('pr_juros', v.toFixed(2)); prEditadoAMao = false; prCalc(true); }
@@ -3481,21 +3495,28 @@ function salvarProrrog() {
   limpaErro('pr_erro');
   const t = DB.titulos.find(x => x.id === val('pr_id'));
   if (!t) return erro('pr_erro', 'Título não encontrado.');
-  const nova = val('pr_novaData'), j = num(val('pr_juros'));
+  const nova = val('pr_novaData'), cobrado = num(val('pr_juros'));
   const forma = val('pr_forma'), dataJuro = val('pr_dataJuro') || hoje();
   const dias = t.dataVenc ? diasEntre(t.dataVenc, nova) : diasEntre(hoje(), nova);
   if (!nova) return erro('pr_erro', 'Informe a nova data de vencimento.');
   if (!(dias > 0)) return erro('pr_erro', 'A nova data precisa ser depois do vencimento atual.');
-  if (!isFinite(j) || j < 0) return erro('pr_erro', 'Informe um valor de juros válido.');
-  if (j > 0 && mesFechado(mesDe(dataJuro))) return erro('pr_erro', `${mesLabel(mesDe(dataJuro))} está fechado. Escolha outra data para o juro ou reabra o mês.`);
+  if (!isFinite(cobrado) || cobrado < 0) return erro('pr_erro', 'Informe um valor válido a cobrar.');
+  if (cobrado > 0 && mesFechado(mesDe(dataJuro))) return erro('pr_erro', `${mesLabel(mesDe(dataJuro))} está fechado. Escolha outra data para o juro ou reabra o mês.`);
 
   const tf = prTarifa();
+  // O campo é o total cobrado. Quando a tarifa é do cliente, ela está dentro
+  // dele — o juro é o que sobra depois de separá-la.
+  const daCliente = tf.quem === 'CLIENTE' ? tf.valor : 0;
+  if (daCliente > 0 && cobrado + .005 < daCliente)
+    return erro('pr_erro', `O total a cobrar não pode ser menor que a tarifa de ${brl(daCliente)}. Zere a tarifa se ela não vale nesta prorrogação.`);
+  const j = +(cobrado - daCliente).toFixed(2);
   if (tf.valor > 0 && mesFechado(mesDe(dataJuro)))
     return erro('pr_erro', `${mesLabel(mesDe(dataJuro))} está fechado, e a tarifa precisa de uma data aberta.`);
 
   const vencAntigo = t.dataVenc;
   t.dataVenc = nova;
-  const nota = `Prorrogado de ${fmtBR(vencAntigo)} para ${fmtBR(nova)} (${dias} dia(s))` + (j ? ` — juros ${brl(j)}` : '');
+  const nota = `Prorrogado de ${fmtBR(vencAntigo)} para ${fmtBR(nova)} (${dias} dia(s))`
+    + (j ? ` — juros ${brl(j)}` : '') + (daCliente ? ` + tarifa ${brl(daCliente)}` : '');
   const obs = val('pr_obs').trim();
   t.obs = (t.obs ? t.obs + ' | ' : '') + nota + (obs ? ' — ' + obs : '');
 
@@ -3529,7 +3550,9 @@ function salvarProrrog() {
     });
   }
   save(); closeModal('ovProrrog'); render();
-  const resumo = [j ? `juros de ${brl(j)}` : '', tf.valor ? `tarifa de ${brl(tf.valor)}` : ''].filter(Boolean).join(' + ');
+  const resumo = daCliente
+    ? `cobrados ${brl(cobrado)} (juros ${brl(j)} + tarifa ${brl(daCliente)})`
+    : [j ? `juros de ${brl(j)}` : '', tf.valor ? `tarifa de ${brl(tf.valor)} de custo` : ''].filter(Boolean).join(' + ');
   toast(`Prorrogado para ${fmtBR(nova)}${resumo ? ' — ' + resumo : ''}`);
 }
 
