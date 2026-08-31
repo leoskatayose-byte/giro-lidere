@@ -596,8 +596,8 @@ tbody tr{transition:.12s} tbody tr:hover{background:var(--panel2)}
   <div class="modal-body">
     <input type="hidden" id="lc_id">
     <div class="fgrid">
-      <div class="field"><label>Fonte</label><select id="lc_fonte"></select></div>
-      <div class="field"><label>Data</label><input type="date" id="lc_data"></div>
+      <div class="field"><label>Fonte</label><select id="lc_fonte" onchange="lcCaixa()"></select></div>
+      <div class="field"><label>Data</label><input type="date" id="lc_data" onchange="lcCaixa()"></div>
     </div>
     <div class="field"><label>Conta (plano de contas)</label><select id="lc_conta" onchange="lcContaMudou()"></select>
       <div class="hint">A conta define se é receita, despesa ou movimentação patrimonial — e sugere o serviço.</div></div>
@@ -612,10 +612,10 @@ tbody tr{transition:.12s} tbody tr:hover{background:var(--panel2)}
     <div class="field"><label>Cliente (opcional)</label><input id="lc_cli" list="dlClientes" oninput="prev('lc_cli','lc_cliPrev')"></div>
     <div class="cprev" id="lc_cliPrev"></div>
     <div class="fgrid">
-      <div class="field"><label>Natureza</label><select id="lc_nat">
+      <div class="field"><label>Natureza</label><select id="lc_nat" onchange="lcCaixa()">
         <option value="ENTRADA">Entrada (dinheiro entrou)</option>
         <option value="SAIDA">Saída (dinheiro saiu)</option></select></div>
-      <div class="field"><label>Valor</label><input type="number" step="0.01" min="0.01" id="lc_valor"></div>
+      <div class="field"><label>Valor</label><input type="number" step="0.01" min="0.01" id="lc_valor" oninput="lcCaixa()"></div>
     </div>
     <div class="field" id="lc_afetaWrap"><label>Isso afeta o resultado?</label>
       <div class="radios">
@@ -625,6 +625,7 @@ tbody tr{transition:.12s} tbody tr:hover{background:var(--panel2)}
       </div></div>
     <div class="field" id="lc_parcialWrap" style="display:none"><label>Valor que afeta o resultado</label>
       <input type="number" step="0.01" min="0" id="lc_parcial"></div>
+    <div id="lc_caixa"></div>
     <div class="field"><label>Observação</label><textarea id="lc_obs" rows="2"></textarea></div>
     <div class="erro" id="lc_erro"></div>
   </div>
@@ -638,12 +639,12 @@ tbody tr{transition:.12s} tbody tr:hover{background:var(--panel2)}
   <div class="modal-body">
     <input type="hidden" id="op_id">
     <div class="fgrid">
-      <div class="field"><label>Fonte</label><select id="op_fonte"></select></div>
+      <div class="field"><label>Fonte</label><select id="op_fonte" onchange="opCalc()"></select></div>
       <div class="field"><label>Cliente (quem enviou)</label><input id="op_cli" list="dlClientes" oninput="prev('op_cli','op_cliPrev')"></div>
     </div>
     <div class="cprev" id="op_cliPrev"></div>
     <div class="fgrid">
-      <div class="field"><label>Data da operação</label><input type="date" id="op_data"></div>
+      <div class="field"><label>Data da operação</label><input type="date" id="op_data" onchange="opCalc()"></div>
       <div class="field"><label>Valor líquido enviado</label><input type="number" step="0.01" min="0" id="op_liq" oninput="opCalc()"></div>
     </div>
     <div class="field"><label>Valor bruto da operação</label><input type="number" step="0.01" min="0.01" id="op_bruto" oninput="opCalc()">
@@ -653,6 +654,7 @@ tbody tr{transition:.12s} tbody tr:hover{background:var(--panel2)}
       <button class="btn btn-sm" onclick="opAddTit()">+ Adicionar título</button></div>
     <div id="op_lista"></div>
     <div class="somatit" id="op_soma"></div>
+    <div id="op_caixa"></div>
     <div class="field"><label>Observação</label><textarea id="op_obs" rows="2"></textarea></div>
     <div class="erro" id="op_erro"></div>
   </div>
@@ -666,7 +668,7 @@ tbody tr{transition:.12s} tbody tr:hover{background:var(--panel2)}
   <div class="modal-body">
     <input type="hidden" id="at_id">
     <div class="fgrid">
-      <div class="field"><label>Fonte</label><select id="at_fonte"></select></div>
+      <div class="field"><label>Fonte</label><select id="at_fonte" onchange="atCalc()"></select></div>
       <div class="field"><label>Cliente / contraparte</label><input id="at_cli" list="dlClientes" oninput="prev('at_cli','at_cliPrev')"></div>
     </div>
     <div class="cprev" id="at_cliPrev"></div>
@@ -689,6 +691,7 @@ tbody tr{transition:.12s} tbody tr:hover{background:var(--panel2)}
     <div class="memo" id="at_memo"></div>
     <div class="field"><div class="hint">O envio não afeta o resultado. Só no retorno é que a diferença entra como receita
       (juros) ou despesa (perda). Os juros abaixo são projeção — o que vale é o valor confirmado no retorno.</div></div>
+    <div id="at_caixa"></div>
     <div class="field"><label>Observação</label><textarea id="at_obs" rows="2"></textarea></div>
     <div class="erro" id="at_erro"></div>
   </div>
@@ -712,6 +715,7 @@ tbody tr{transition:.12s} tbody tr:hover{background:var(--panel2)}
     <div class="field"><div class="hint">Cada fonte tem a conciliação dela. Por isso a transferência move o caixa
       <b>e</b> o recurso das duas — se só o caixa fosse, a origem ficaria com saldo a menos e recurso igual,
       e a conta pararia de fechar. No geral o efeito é zero, e nada entra como receita ou despesa.</div></div>
+    <div id="tf_caixa"></div>
     <div class="field"><label>Observação</label><textarea id="tf_obs" rows="2"></textarea></div>
     <div class="erro" id="tf_erro"></div>
   </div>
@@ -741,6 +745,7 @@ tbody tr{transition:.12s} tbody tr:hover{background:var(--panel2)}
       <div class="field"><label>&nbsp;</label><div id="rc_jurosBtn"></div></div>
     </div>
     <div class="memo" id="rc_memo"></div>
+    <div id="rc_caixa"></div>
     <div id="rc_hist"></div>
     <div class="field"><label>Observação</label><textarea id="rc_obs" rows="2"></textarea></div>
     <div class="erro" id="rc_erro"></div>
@@ -1695,7 +1700,12 @@ VIEWS.painel = function () {
   const conciliacao = `<div class="panel"><div class="panel-head"><h2>Conciliação<small>títulos a vencer + antecipações em aberto + saldo bancário tem que dar o montante</small></h2></div>
     <div class="grid3">${['GIRO', 'LEO', 'GERAL'].map(f => cardConc(conc(f))).join('')}</div></div>`;
 
-  return stats + alertas.join('') + conciliacao + painelConcentracao() +
+  // O geral só diz quanto existe. Quem paga é uma fonte de cada vez, então o
+  // número que decide se dá para operar é o de cada uma.
+  const caixa = `<div class="panel"><div class="panel-head"><h2>Caixa disponível por fonte<small>o geral é a soma, mas cada saída sai de uma fonte só</small></h2></div>
+    <div style="padding:0 14px 14px">${cardsCaixa()}</div></div>`;
+
+  return stats + alertas.join('') + caixa + conciliacao + painelConcentracao() +
     grafResultadoServico() + `<div class="grid2">${grafTitulosPorMes()}${grafEvolucao()}</div>` + grafPorConta();
 };
 
@@ -2649,9 +2659,17 @@ function abrirLanc(id) {
   setVal('lc_parcial', afeta === 'PARCIAL' ? Math.abs(m.resultado) : '');
   setVal('lc_obs', m ? m.obs : '');
   lcServico = m ? (m.servico || null) : null;
-  lcAfeta(); lcContaMudou();
+  lcAfeta(); lcContaMudou(); lcCaixa();
   openModal('ovLanc'); setTimeout(() => el('lc_desc').focus(), 60);
 }
+/* O aviso reavalia a cada tecla: a pessoa vê o furo enquanto digita o valor,
+   não depois de salvar. */
+function lcCaixa() {
+  const saida = val('lc_nat') === 'SAIDA';
+  return avisoCaixa('lc_caixa', val('lc_fonte'), saida ? num(val('lc_valor')) : 0,
+                    val('lc_data'), { trocaFonte: 'lcTrocaFonte', ignoraId: val('lc_id') || null });
+}
+function lcTrocaFonte(cod) { setVal('lc_fonte', cod); lcCaixa(); }
 function lcAfeta() {
   const v = document.querySelector('input[name=lc_afeta]:checked').value;
   el('lc_parcialWrap').style.display = v === 'PARCIAL' ? 'block' : 'none';
@@ -2696,10 +2714,12 @@ function salvarLanc() {
     servico: (lcServico && lcServico !== (conta.servico || 'AMBOS')) ? lcServico : null
   };
   const id = val('lc_id');
-  if (id) Object.assign(DB.movs.find(x => x.id === id), dados);
-  else DB.movs.push({ id: uid(), seq: proximaSeq(), tituloId: null, operacaoId: null, deletedAt: null, ...dados });
-  garantirCliente(cli);
-  save(); closeModal('ovLanc'); render(); toast(id ? 'Lançamento atualizado' : 'Lançamento registrado');
+  confirmaCaixa(lcCaixa(), 'a saída', () => {
+    if (id) Object.assign(DB.movs.find(x => x.id === id), dados);
+    else DB.movs.push({ id: uid(), seq: proximaSeq(), tituloId: null, operacaoId: null, deletedAt: null, ...dados });
+    garantirCliente(cli);
+    save(); closeModal('ovLanc'); render(); toast(id ? 'Lançamento atualizado' : 'Lançamento registrado');
+  });
 }
 function excluirLanc(id) {
   const m = DB.movs.find(x => x.id === id); if (!m) return;
@@ -2749,7 +2769,14 @@ function opCalc() {
   box.className = 'somatit ' + (bate ? 'ok' : 'erro');
   box.textContent = bate ? `Total dos títulos: ${brl(total)} — bate com o valor bruto.`
     : `Total dos títulos: ${brl(total)} · Bruto: ${brl(bruto)} · ${bruto - total >= 0 ? 'falta' : 'sobra'} ${brl(Math.abs(bruto - total))}`;
+  return opCaixa();
 }
+/* Na operação quem sai do caixa é o líquido enviado, não o bruto. */
+function opCaixa() {
+  return avisoCaixa('op_caixa', val('op_fonte'), num(val('op_liq')), val('op_data'),
+                    { trocaFonte: 'opTrocaFonte' });
+}
+function opTrocaFonte(cod) { setVal('op_fonte', cod); opCalc(); }
 function abrirOper(opId) {
   if (opId && !podeEditarOper(opId)) return toast('Essa operação já tem título recebido e não pode mais ser editada');
   limpaErro('op_erro');
@@ -2863,16 +2890,24 @@ function abrirAnt(id) {
 function atCalc() {
   const box = el('at_memo'), v = num(val('at_valor')), envio = val('at_envio'), prev2 = val('at_prev');
   const bruto = val('at_taxa'), taxa = bruto === '' ? taxaPadrao() : num(bruto);
-  if (!(v > 0) || !envio || !prev2 || !(taxa > 0)) { box.classList.remove('show'); return; }
+  if (!(v > 0) || !envio || !prev2 || !(taxa > 0)) { box.classList.remove('show'); atAvisoCaixa(); return; }
   const dias = diasEntre(envio, prev2);
-  if (dias == null || dias < 0) { box.classList.remove('show'); return; }
+  if (dias == null || dias < 0) { box.classList.remove('show'); atAvisoCaixa(); return; }
   const j = juros(v, taxa, dias);
   box.innerHTML = `<div class="l"><span>Prazo previsto</span><span>${dias} dia(s)</span></div>
     <div class="l"><span>Juros a ${fmtTaxa(taxa)}% ao mês${bruto === '' ? ' (padrão)' : ''}</span><span>${brl(j)}</span></div>
     <div class="l tot"><span>Retorno previsto</span><span>${brl(v + j)}</span></div>
     <div class="conta">${brl(v)} × ${fmtTaxa(taxa)}% ÷ 30 × ${dias} = ${brl(j)}</div>`;
   box.classList.add('show');
+  atAvisoCaixa();
 }
+/* Captação é entrada de dinheiro: não há saldo a conferir. */
+function atAvisoCaixa() {
+  const cap = atNat === 'CAPTACAO';
+  return avisoCaixa('at_caixa', val('at_fonte'), cap ? 0 : num(val('at_valor')),
+                    val('at_envio'), { trocaFonte: 'atTrocaFonte' });
+}
+function atTrocaFonte(cod) { setVal('at_fonte', cod); atCalc(); }
 function salvarAnt() {
   limpaErro('at_erro');
   const fonte = val('at_fonte'), cli = val('at_cli').trim(), envio = val('at_envio');
@@ -2885,6 +2920,13 @@ function salvarAnt() {
   if (mesFechado(mesDe(envio))) return erro('at_erro', `${mesLabel(mesDe(envio))} está fechado. Reabra em Fechamento para lançar nesse mês.`);
 
   const id = val('at_id');
+  const segue = () => {
+    const t0 = id ? DB.titulos.find(x => x.id === id) : null;
+    salvarAntAgora(id, t0, fonte, cli, sac, envio, prev2, v, taxa, obs);
+  };
+  return confirmaCaixa(atNat === 'CAPTACAO' ? null : atAvisoCaixa(), 'o envio', segue);
+}
+function salvarAntAgora(id, _t0, fonte, cli, sac, envio, prev2, v, taxa, obs) {
   if (id) {
     const t = DB.titulos.find(x => x.id === id);
     Object.assign(t, { fonte, cliente: cli, sacado: sac, dataEntrada: envio, dataVenc: prev2 || null,
@@ -2985,6 +3027,8 @@ function rcCalc(preencher) {
   rcHistorico(t);
   const rende = t.tipo === 'ANTECIPACAO' || ehCaptacao(t);
   const cap = rcSaida(t), data = val('rc_data') || hoje();
+  // devolver recurso tira dinheiro do caixa como qualquer outra saída
+  avisoCaixa('rc_caixa', t.fonte, cap ? num(val('rc_valor')) : 0, data, {});
   const p = projecao(t, data);
   const btn = el('rc_jurosBtn');
 
@@ -4699,12 +4743,14 @@ function abrirTransf() {
   setVal('tf_data', dataSugerida());
   setVal('tf_valor', '');
   setVal('tf_obs', '');
+  el('tf_caixa').innerHTML = '';
   tfCalc(); openModal('ovTransf'); setTimeout(() => el('tf_valor').focus(), 60);
 }
 
 function tfCalc() {
   const de = val('tf_de'), para = val('tf_para'), v = num(val('tf_valor')), box = el('tf_memo');
-  if (!(v > 0) || !de || !para || de === para) { box.classList.remove('show'); return; }
+  if (!(v > 0) || !de || !para || de === para) { box.classList.remove('show'); el('tf_caixa').innerHTML = ''; return; }
+  avisoCaixa('tf_caixa', de, v, val('tf_data'), {});
   const cd = conc(de), cp = conc(para);
   box.innerHTML = `
     <div class="l"><span><b>${esc(rotuloFonte(de))}</b> — caixa</span><span>${brl(cd.saldo)} → ${brl(cd.saldo - v)}</span></div>
@@ -4736,11 +4782,96 @@ function salvarTransf() {
     contaId: conta ? conta.id : null, servico: null,
     obs: obs || 'Transferência entre fontes', deletedAt: null
   });
-  DB.movs.push(perna(de, null, v, -v));
-  DB.movs.push(perna(para, v, null, v));
+  confirmaCaixa(checaCaixa(de, v, data), 'a transferência', () => {
+    DB.movs.push(perna(de, null, v, -v));
+    DB.movs.push(perna(para, v, null, v));
+    save(); closeModal('ovTransf'); render();
+    toast(`${brl(v)} transferido de ${rotuloFonte(de)} para ${rotuloFonte(para)}`);
+  });
+}
 
-  save(); closeModal('ovTransf'); render();
-  toast(`${brl(v)} transferido de ${rotuloFonte(de)} para ${rotuloFonte(para)}`);
+/* =========================================================================
+   Caixa disponível por fonte
+   O geral é a soma das duas, mas quem paga é uma delas. Se a Lidere tem 700
+   no caixa, uma tarifa de 1.200 não sai de lá — sai do recurso do Leonardo,
+   ou fica negativa. O sistema não impede: avisa antes, diz de onde daria para
+   sair, e mostra em quanto a fonte ficaria.
+   ========================================================================= */
+
+/* Quanto a fonte tem disponível numa data. Usa a data do lançamento, não hoje:
+   lançar dia 10 num caixa que só encheu dia 20 é furo de caixa de verdade. */
+function disponivel(fonte, data) { return saldo(fonte, data || hoje()); }
+
+/* null = tem saldo. Objeto = falta, com de onde daria para sair. */
+function checaCaixa(fonte, valor, data, ignoraId) {
+  if (!fonte || !(valor > 0)) return null;
+  const d = data || hoje();
+  // editar um lançamento não pode contar o próprio valor antigo como gasto
+  const antigo = ignoraId ? movs().find(m => m.id === ignoraId) : null;
+  const devolve = antigo && antigo.fonte === fonte && antigo.data <= d ? (antigo.saida || 0) - (antigo.entrada || 0) : 0;
+  const disp = +(disponivel(fonte, d) + devolve).toFixed(2);
+  if (valor <= disp + .005) return null;
+  const outras = DB.fontes.filter(f => f.ativa && f.codigo !== fonte)
+    .map(f => ({ codigo: f.codigo, disp: +disponivel(f.codigo, d).toFixed(2) }))
+    .sort((a, b) => b.disp - a.disp);
+  return {
+    fonte, data: d, valor, disp,
+    falta: +(valor - disp).toFixed(2),
+    depois: +(disp - valor).toFixed(2),
+    cobre: outras.filter(o => o.disp >= valor - .005),
+    outras
+  };
+}
+
+/* Desenha o aviso numa caixa da tela. Devolve o mesmo objeto do checaCaixa,
+   para quem chamou decidir se pede confirmação ao salvar. */
+function avisoCaixa(idBox, fonte, valor, data, opts) {
+  const box = el(idBox); if (!box) return null;
+  const o = opts || {};
+  const r = checaCaixa(fonte, valor, data, o.ignoraId);
+  if (!r) { box.innerHTML = ''; return null; }
+  const mesmaData = r.data === hoje();
+  const troca = o.trocaFonte && r.cobre.length
+    ? ` <button class="btn btn-sm" onclick="${o.trocaFonte}('${r.cobre[0].codigo}')">Lançar em ${esc(rotuloFonte(r.cobre[0].codigo))}</button>`
+    : '';
+  box.innerHTML = r.cobre.length
+    ? `<div class="alert bad"><b>${esc(rotuloFonte(fonte))} não tem esse saldo${mesmaData ? '' : ' em ' + fmtBR(r.data)}.</b>${troca}
+        Disponível: ${brl(r.disp)} — faltam ${brl(r.falta)}.
+        ${r.cobre.map(c => `<b>${esc(rotuloFonte(c.codigo))}</b> tem ${brl(c.disp)}`).join(' · ')}.
+        Se lançar assim mesmo, ${esc(rotuloFonte(fonte))} fica em <b>${brl(r.depois)}</b>.</div>`
+    : `<div class="alert bad"><b>Nenhuma fonte tem ${brl(r.valor)}${mesmaData ? '' : ' em ' + fmtBR(r.data)}.</b>
+        ${[{ codigo: fonte, disp: r.disp }].concat(r.outras).map(c => `${esc(rotuloFonte(c.codigo))} ${brl(c.disp)}`).join(' · ')}.
+        Dá para lançar, mas ${esc(rotuloFonte(fonte))} fica em <b>${brl(r.depois)}</b>.</div>`;
+  return r;
+}
+
+/* Ao salvar, só interrompe quando nenhuma fonte cobre — que é o caso de
+   caixa negativo de verdade. Quando a outra fonte tem o dinheiro, o aviso na
+   tela já foi dado e a escolha é de quem lança. */
+function confirmaCaixa(r, oQue, seguir) {
+  if (!r || r.cobre.length) return seguir();
+  confirmar(`${rotuloFonte(r.fonte)} tem ${brl(r.disp)} e ${oQue} é de ${brl(r.valor)}. `
+    + `O caixa fica em ${brl(r.depois)}. Lançar assim mesmo?`, seguir, 'Caixa sem saldo');
+}
+
+/* Painel: quanto cada fonte tem para operar hoje, e o alerta de negativo. */
+function cardsCaixa() {
+  const fs = fontesGeral();
+  const linhas = fs.map(c => ({ c, disp: disponivel(c, hoje()) }));
+  const negativas = linhas.filter(x => x.disp < 0);
+  const aviso = negativas.length
+    ? `<div class="alert bad"><b>${negativas.map(x => rotuloFonte(x.c)).join(' e ')} com caixa negativo.</b>
+        ${negativas.map(x => `${esc(rotuloFonte(x.c))}: ${brl(x.disp)}`).join(' · ')}.
+        Saída lançada onde não havia dinheiro — ou o lançamento é de outra fonte, ou falta registrar uma entrada.</div>`
+    : '';
+  return `<div class="stats">
+    ${linhas.map(x => `<div class="stat"><div class="k">${esc(rotuloFonte(x.c))} — para operar</div>
+      <div class="v ${x.disp < 0 ? 'neg' : ''}">${brl(x.disp)}</div>
+      <div class="sub">${esc(nomeFonte(x.c))}</div></div>`).join('')}
+    <div class="stat"><div class="k">Geral — para operar</div>
+      <div class="v">${brl(linhas.reduce((s, x) => s + x.disp, 0))}</div>
+      <div class="sub">as duas juntas, mas quem paga é uma delas</div></div>
+  </div>${aviso}`;
 }
 
 /* =========================================================================
