@@ -846,6 +846,13 @@ tr.apoff .inl{opacity:.7}
     <button class="btn btn-neg" onclick="salvarPerda()">Dar baixa por perda</button></div>
 </div></div>
 
+<!-- ===================== Extrato do cliente ===================== -->
+<div class="overlay" id="ovExtrato"><div class="modal wide">
+  <div class="modal-head"><h3 id="exTit">Extrato</h3><button class="modal-x" onclick="closeModal('ovExtrato')">×</button></div>
+  <div class="modal-body" id="exCorpo"></div>
+  <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal('ovExtrato')">Fechar</button></div>
+</div></div>
+
 <!-- ===================== Cliente ===================== -->
 <div class="overlay" id="ovCliente"><div class="modal">
   <div class="modal-head"><h3 id="clTit">Novo cliente</h3><button class="modal-x" onclick="closeModal('ovCliente')">×</button></div>
@@ -1560,6 +1567,12 @@ function jurosAApropriar(t, ate, taxaEscolhida) {
 function chaveJuros(t) {
   if (ehCaptacao(t)) return 'despesa_juros';
   if (t.tipo === 'ANTECIPACAO') return 'receita_retorno_antecipacao';
+  // Parcela de juros que rende de novo continua na conta dela: o juro do juro
+  // de uma antecipação não vira, de repente, juro de título.
+  if (t.tipo === 'JUROS' && t.contaId) {
+    const c = contaPorId(t.contaId);
+    if (c && c.chave) return c.chave;
+  }
   return 'receita_juros';
 }
 
@@ -1595,14 +1608,15 @@ const IC = {
   projecao: '<path d="M3 17l5-6 4 3 5-7 4 4"/><path d="M3 21h18"/>',
   fechamento: '<rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 018 0v3"/>',
   acesso: '<circle cx="12" cy="8" r="3.4"/><path d="M5.5 20c0-3.4 2.9-5.6 6.5-5.6s6.5 2.2 6.5 5.6"/>',
-  lixeira: '<path d="M3.5 6h17M8.5 6V3.6h7V6M6.4 6v14.4h11.2V6"/>'
+  lixeira: '<path d="M3.5 6h17M8.5 6V3.6h7V6M6.4 6v14.4h11.2V6"/>',
+  clientes: '<circle cx="8" cy="8" r="3.2"/><path d="M2.5 20c0-3.2 2.5-5.2 5.5-5.2s5.5 2 5.5 5.2"/><path d="M16 5.5a3 3 0 010 5.6M18 14.6c2 .7 3.5 2.5 3.5 5.4"/>'
 };
 const svgIc = k => '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' + (IC[k] || '') + '</svg>';
 
 const NAV = [
   { g: 'Visão', its: [['painel', 'Painel']] },
   { g: 'Operação', its: [['razao', 'Razão'], ['titulos', 'Títulos a vencer'], ['antecipacoes', 'Antecipações'], ['captacoes', 'Captações'], ['recebidos', 'Recebidos']] },
-  { g: 'Análise', its: [['resultado', 'Resultado'], ['projecao', 'Projeção de caixa'], ['contas', 'Contas a pagar']] },
+  { g: 'Análise', its: [['clientes', 'Por cliente'], ['resultado', 'Resultado'], ['projecao', 'Projeção de caixa'], ['contas', 'Contas a pagar']] },
   { g: 'Ajustes', its: [['fechamento', 'Fechamento'], ['cadastros', 'Cadastros'], ['plano', 'Plano de contas'], ...(MODO_NUVEM ? [['acesso', 'Acesso']] : []), ['lixeira', 'Excluídos']] }
 ];
 const SECAO = {
@@ -1612,6 +1626,7 @@ const SECAO = {
   antecipacoes: ['Antecipações', 'Recurso enviado que ainda não voltou, com juros projetados'],
   captacoes: ['Captações', 'Recurso de terceiro no seu caixa — e o custo que ele gera'],
   recebidos: ['Recebidos', 'Títulos e antecipações já baixados'],
+  clientes: ['Por cliente', 'Quanto cada cliente deve hoje, e de que esse número é feito'],
   resultado: ['Resultado', 'Receitas e despesas por conta, com comparativo do período anterior'],
   projecao: ['Projeção de caixa', 'O que já está contratado, dia a dia, a partir do saldo de hoje'],
   fechamento: ['Fechamento', 'Mês conferido vira mês travado — e reabrir é um clique'],
@@ -4801,6 +4816,9 @@ function calcApropriar() {
 function apNatureza(t) {
   if (ehCaptacao(t)) return '<span class="chip chip-bad">captação — custo</span>';
   if (t.tipo === 'ANTECIPACAO') return `<span class="chip chip-ok">antecipação</span>`;
+  // Marcar esta linha é cobrar juro sobre juro. É legítimo no regime composto,
+  // mas tem que ser escolha visível — por isso ela vem desmarcada e nomeada.
+  if (t.tipo === 'JUROS') return `<span class="chip chip-warn">parcela de juros — juro sobre juro</span>`;
   return `<span class="chip chip-n">título${t.nf ? ' ' + esc(t.nf) : ''}</span>`;
 }
 
@@ -4811,15 +4829,16 @@ function apPorConta() {
   const g = {};
   apJuros.linhas.filter(x => x.on).forEach(x => {
     const ch = chaveJuros(x.t);
-    (g[ch] = g[ch] || { chave: ch, conta: contaPorChave(ch), linhas: [], porFonte: {} });
+    (g[ch] = g[ch] || { chave: ch, conta: contaPorChave(ch), linhas: [], grupos: {} });
     g[ch].linhas.push(x);
-    (g[ch].porFonte[x.t.fonte] = g[ch].porFonte[x.t.fonte] || []).push(x.efeito);
+    const k = x.t.cliente + '|' + x.t.fonte;
+    (g[ch].grupos[k] = g[ch].grupos[k] || []).push(x.efeito);
   });
-  // arredonda por fonte, como o salvar faz — senão a prévia sai um centavo
-  // diferente do que vai ser lançado
+  // arredonda por cliente e fonte, que é como o salvar agrupa — senão a prévia
+  // sai um centavo diferente do que vai ser lançado
   return Object.values(g).map(x => ({
     ...x,
-    total: +Object.values(x.porFonte)
+    total: +Object.values(x.grupos)
       .reduce((s, arr) => s + +arr.reduce((a, v) => a + v, 0).toFixed(2), 0).toFixed(2)
   }));
 }
@@ -4871,7 +4890,7 @@ function salvarApropriar() {
       jurosAte: x.t.jurosAte === undefined ? null : x.t.jurosAte,
       taxa: x.t.taxaMensal === undefined ? null : x.t.taxaMensal
     })),
-    criou: [], movs: []
+    criou: [], somou: [], movs: []
   };
   // O lançamento de resultado tem que valer exatamente o que foi aplicado nos
   // títulos, centavo a centavo — somar por fora arredondaria diferente e a
@@ -4883,32 +4902,60 @@ function salvarApropriar() {
   };
 
   if (destino === 'SEPARADO') {
-    // Um título por fonte E por conta: misturar fontes faria a conciliação de
-    // cada uma parar de fechar, e misturar contas apagaria a categoria.
+    // Uma parcela de juros POR CLIENTE, por fonte e por conta. Por cliente
+    // porque é assim que se cobra: o Sidney tem a parcela dele, a Lika a dela.
+    // Por fonte porque cada uma concilia sozinha, e por conta porque juro de
+    // título e retorno de antecipação não são a mesma receita.
     const grupos = {};
     marcadas.filter(x => !x.custo).forEach(x => {
-      const k = x.t.fonte + '|' + chaveJuros(x.t);
-      (grupos[k] = grupos[k] || { fonte: x.t.fonte, chave: chaveJuros(x.t), linhas: [] }).linhas.push(x);
+      const k = x.t.cliente + '|' + x.t.fonte + '|' + chaveJuros(x.t);
+      (grupos[k] = grupos[k] || { cliente: x.t.cliente, fonte: x.t.fonte, chave: chaveJuros(x.t), linhas: [] }).linhas.push(x);
     });
     Object.values(grupos).forEach(g => {
       const valorRec = +g.linhas.reduce((s, x) => s + x.efeito, 0).toFixed(2);
-      const nomes = new Set(g.linhas.map(x => x.t.cliente));
-      const nome = cli || (nomes.size === 1 ? g.linhas[0].t.cliente : 'Vários clientes');
       const conta = contaPorChave(g.chave);
       efeito(g.fonte, g.chave, valorRec);
-      const novoId = uid();
-      lote.criou.push(novoId);
-      DB.titulos.push({
-        id: novoId, fonte: g.fonte, cliente: nome, sacado: '', tipo: 'JUROS',
-        nf: '', emissao: 'NA', dataEntrada: ate, dataVenc: ate,
-        valorBruto: null, valorLiquido: null, valor: valorRec, status: 'A_VENCER',
-        dataReceb: null, valorRecebido: null,
-        // a categoria fica no próprio título, não só no lançamento
-        contaId: conta ? conta.id : null,
-        obs: `${conta ? conta.nome : 'Juros'} — ${g.linhas.length} lançamento(s) até ${fmtBR(ate)}`,
-        operacaoId: null, numAntecipacao: null, taxaMensal: null, jurosAte: null,
-        loteApropriacao: lote.id, deletedAt: null
-      });
+      // o que entrou nesta rodada, guardado para o extrato conseguir abrir
+      const rodada = {
+        ate, valor: valorRec, lote: lote.id,
+        itens: g.linhas.map(x => ({
+          tituloId: x.t.id, tipo: x.t.tipo, num: x.t.numAntecipacao || null,
+          nf: x.t.nf || '', enviadaEm: x.t.dataEntrada, base: +(x.t.valor || 0).toFixed(2),
+          desde: x.desde, dias: x.dias, taxa: x.taxa, juros: +x.efeito.toFixed(2)
+        }))
+      };
+      // Parcela que já existe em aberto continua a mesma: ela cresce e o
+      // vencimento anda para a nova data de corte. Criar uma nova a cada
+      // rodada encheria a lista de pedaços do mesmo acerto.
+      const aberta = tits().find(t => t.tipo === 'JUROS' && emAberto(t)
+        && t.cliente === g.cliente && t.fonte === g.fonte
+        && (t.contaId || null) === (conta ? conta.id : null));
+      if (aberta) {
+        lote.somou.push({
+          id: aberta.id, valor: aberta.valor, dataVenc: aberta.dataVenc,
+          obs: aberta.obs, rodadas: (aberta.composicao || []).length
+        });
+        aberta.valor = +(aberta.valor + valorRec).toFixed(2);
+        aberta.dataVenc = ate;
+        aberta.composicao = (aberta.composicao || []).concat([rodada]);
+        aberta.obs = `${conta ? conta.nome : 'Juros'} de ${esc(g.cliente)} — `
+          + `${aberta.composicao.length} apropriação(ões), a última até ${fmtBR(ate)}`;
+      } else {
+        const novoId = uid();
+        lote.criou.push(novoId);
+        DB.titulos.push({
+          id: novoId, fonte: g.fonte, cliente: g.cliente, sacado: '', tipo: 'JUROS',
+          nf: '', emissao: 'NA', dataEntrada: ate, dataVenc: ate,
+          valorBruto: null, valorLiquido: null, valor: valorRec, status: 'A_VENCER',
+          dataReceb: null, valorRecebido: null,
+          // a categoria fica no próprio título, não só no lançamento
+          contaId: conta ? conta.id : null,
+          composicao: [rodada],
+          obs: `${conta ? conta.nome : 'Juros'} de ${esc(g.cliente)} — 1 apropriação, até ${fmtBR(ate)}`,
+          operacaoId: null, numAntecipacao: null, taxaMensal: null, jurosAte: null,
+          loteApropriacao: lote.id, deletedAt: null
+        });
+      }
     });
     // Captação nunca vira título a receber: dizer que há mais a receber por
     // causa de um custo seria mentir. O juro devido engorda a própria dívida.
@@ -4969,7 +5016,7 @@ function desfazerApropriacao(loteId) {
   if (bloqueadoPorFechamento(l.ate)) return;
 
   // título de juros que já foi recebido não pode simplesmente sumir
-  const recebidos = (l.criou || [])
+  const recebidos = (l.criou || []).concat((l.somou || []).map(a => a.id))
     .map(id => DB.titulos.find(t => t.id === id))
     .filter(t => t && (t.status === 'PAGO' || recebidoParcial(t.id) > 0));
   if (recebidos.length)
@@ -4977,7 +5024,8 @@ function desfazerApropriacao(loteId) {
 
   confirmar(`Desfazer a apropriação de ${brl(l.total)} até ${fmtBR(l.ate)}?
     ${l.n} título(s) voltam a render desde onde rendiam antes, o lançamento sai do resultado
-    ${(l.criou || []).length ? `e o título de juros criado é removido.` : '.'}`, () => {
+    ${(l.criou || []).length ? `, ${(l.criou || []).length} parcela(s) de juros criada(s) são removidas` : ''}
+    ${(l.somou || []).length ? `e ${(l.somou || []).length} parcela(s) de juros voltam ao valor anterior` : ''}.`, () => {
     // 1) os títulos voltam ao valor e ao relógio de juros de antes
     (l.antes || []).forEach(a => {
       const t = DB.titulos.find(x => x.id === a.id); if (!t) return;
@@ -4985,7 +5033,13 @@ function desfazerApropriacao(loteId) {
       if (a.jurosAte === null) delete t.jurosAte; else t.jurosAte = a.jurosAte;
       if (a.taxa === null) delete t.taxaMensal; else t.taxaMensal = a.taxa;
     });
-    // 2) o título de juros criado desaparece — ele só existia por causa disto
+    // 2) a parcela que só existia por causa disto desaparece; a que já existia
+    //    volta ao valor, ao vencimento e à composição que tinha antes
+    (l.somou || []).forEach(a => {
+      const t = DB.titulos.find(x => x.id === a.id); if (!t) return;
+      t.valor = a.valor; t.dataVenc = a.dataVenc; t.obs = a.obs;
+      t.composicao = (t.composicao || []).slice(0, a.rodadas);
+    });
     const criados = new Set(l.criou || []);
     DB.titulos = DB.titulos.filter(t => !criados.has(t.id));
     // 3) e o lançamento sai do resultado
@@ -5526,6 +5580,186 @@ const DIAS_SEMANA = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira',
 function diaDaSemana(dk) {
   const [y, m, d] = dk.split('-').map(Number);
   return DIAS_SEMANA[new Date(y, m - 1, d).getDay()];
+}
+
+/* =========================================================================
+   Posição por cliente
+   O que o cliente deve hoje é um número só — antecipações na rua, títulos a
+   vencer e a parcela de juros somados. Mas esse número só serve se der para
+   abrir: de quando é cada antecipação, quanto de juro ela gerou, em que
+   apropriação isso entrou. Consolidar sem poder abrir é perder o histórico;
+   por isso a parcela de juros guarda a composição de cada rodada, e nada
+   aqui apaga o registro individual.
+   ========================================================================= */
+
+/* A posição de um cliente numa fonte (ou no geral). */
+function posicaoCliente(nome, fs) {
+  const fontes = fs || fontesDoFiltro();
+  const meus = tits().filter(t => t.cliente === nome && fontes.includes(t.fonte));
+  const abertos = meus.filter(emAberto);
+  const antec = abertos.filter(t => t.tipo === 'ANTECIPACAO');
+  const captacao = abertos.filter(ehCaptacao);
+  const jurosTit = abertos.filter(t => t.tipo === 'JUROS');
+  const outros = abertos.filter(t => !naRua(t) && t.tipo !== 'JUROS');
+  const baixados = meus.filter(t => t.status === 'PAGO' || t.status === 'PERDA');
+
+  const soma = l => +l.reduce((s, t) => s + (t.valor || 0), 0).toFixed(2);
+  // juros que já correram e ainda não viraram parcela
+  const aApropriar = +abertos.filter(t => !ehCaptacao(t))
+    .reduce((s, t) => { const p = jurosAApropriar(t, hoje()); return s + (p.dias > 0 ? p.efeito : 0); }, 0).toFixed(2);
+
+  const recebido = +meus.reduce((s, t) => s + recebidoParcial(t.id)
+    + (t.status === 'PAGO' ? (t.valorRecebido || 0) : 0), 0).toFixed(2);
+
+  const principal = soma(antec) + soma(outros);
+  return {
+    nome, fontes, meus, abertos, antec, outros, jurosTit, captacao, baixados,
+    principal, juros: soma(jurosTit), captado: soma(captacao),
+    aApropriar, recebido,
+    total: +(principal + soma(jurosTit)).toFixed(2),
+    // último dia em que os juros foram acertados: é até aí que a conta está fechada
+    acertadoAte: abertos.map(t => t.jurosAte).filter(Boolean).sort().slice(-1)[0] || null
+  };
+}
+
+VIEWS.clientes = function () {
+  const fs = fontesDoFiltro();
+  const nomes = [...new Set(tits().filter(t => emAberto(t) && fs.includes(t.fonte)).map(t => t.cliente))]
+    .filter(Boolean);
+  const linhas = nomes.map(n => posicaoCliente(n, fs))
+    .filter(p => Math.abs(p.total) > .005 || Math.abs(p.captado) > .005)
+    .sort((a, b) => b.total - a.total);
+
+  const total = +linhas.reduce((s, p) => s + p.total, 0).toFixed(2);
+  const pend = +linhas.reduce((s, p) => s + p.aApropriar, 0).toFixed(2);
+  const semParcela = linhas.filter(p => p.aApropriar > .5 && !p.jurosTit.length).length;
+
+  const stats = `<div class="stats">
+    <div class="stat"><div class="k">A receber</div><div class="v">${brl(total)}</div>
+      <div class="sub">${linhas.length} cliente(s) com saldo em aberto</div></div>
+    <div class="stat"><div class="k">Principal</div><div class="v">${brl(linhas.reduce((s, p) => s + p.principal, 0))}</div>
+      <div class="sub">antecipações e títulos, sem os juros</div></div>
+    <div class="stat"><div class="k">Juros já apropriados</div><div class="v pos">${brl(linhas.reduce((s, p) => s + p.juros, 0))}</div>
+      <div class="sub">viraram parcela cobrável</div></div>
+    <div class="stat"><div class="k">Juros a apropriar</div><div class="v ${Math.abs(pend) > .5 ? 'warntxt' : 'pos'}">${brl(pend)}</div>
+      <div class="sub">já corridos, ainda fora do resultado</div></div>
+  </div>`;
+
+  const aviso = Math.abs(pend) > .5
+    ? `<div class="alert"><b>${brl(pend)} de juros já corridos e ainda sem parcela.</b>
+       ${semParcela ? `${semParcela} cliente(s) ainda não têm parcela de juros aberta. ` : ''}
+       Apropriar transforma isso numa parcela por cliente, que vence na data do corte e vai sendo abatida quando ele mandar recurso.
+       <button class="btn btn-sm right" onclick="abrirApropriar()">Apropriar juros</button></div>`
+    : '';
+
+  const geral = fonteFiltro === 'GERAL';
+  const corpo = linhas.map(p => `<tr>
+      <td>${cliTag(p.nome)}</td>
+      <td class="num">${brl(p.principal)}</td>
+      <td class="num ${p.juros ? 'pos' : 'muted'}">${p.juros ? brl(p.juros) : '—'}</td>
+      <td class="num ${Math.abs(p.aApropriar) > .5 ? 'warntxt' : 'muted'}">${Math.abs(p.aApropriar) > .005 ? brl(p.aApropriar) : '—'}</td>
+      <td class="num"><b>${brl(p.total)}</b></td>
+      <td>${p.acertadoAte ? fmtBR(p.acertadoAte) : '<span class="muted">nunca</span>'}</td>
+      <td class="num muted">${p.abertos.length}</td>
+      <td><button class="btn btn-sm" onclick="abrirExtrato('${esc(p.nome).replace(/'/g, "\\'")}')">Extrato</button></td>
+    </tr>`).join('');
+
+  return stats + aviso +
+    `<div class="filters">${segFonte()}
+      <button class="btn btn-sm right" onclick="abrirApropriar()">⧗ Apropriar juros</button></div>
+    <div class="panel"><div class="panel-head"><h2>Posição por cliente<small>o que cada um deve hoje: principal + juros apropriados</small></h2></div>
+      <div class="tbl-scroll"><table><thead><tr>
+        <th>Cliente</th><th class="num">Principal</th><th class="num">Juros apropriados</th>
+        <th class="num">A apropriar</th><th class="num">Total a receber</th>
+        <th>Juros acertados até</th><th class="num">Itens</th><th></th></tr></thead>
+      <tbody>${corpo || `<tr><td colspan="8"><div class="empty">Nenhum cliente com saldo em aberto${geral ? '' : ' nesta fonte'}.</div></td></tr>`}</tbody></table></div></div>`;
+};
+
+/* ---------- Extrato de um cliente ---------- */
+function abrirExtrato(nome) {
+  const p = posicaoCliente(nome);
+  el('exTit').textContent = `Extrato — ${nome}`;
+  el('exCorpo').innerHTML = extratoHTML(p);
+  openModal('ovExtrato');
+}
+
+function extratoHTML(p) {
+  const linhaAberta = t => {
+    const j = jurosAApropriar(t, hoje());
+    const rot = ehCaptacao(t) ? 'Captação' : t.tipo === 'ANTECIPACAO' ? numAntLabel(t.numAntecipacao)
+      : t.tipo === 'JUROS' ? 'Parcela de juros' : (t.nf ? 'NF ' + esc(t.nf) : 'Título');
+    const parcial = recebidoParcial(t.id);
+    return `<tr>
+      <td>${esc(rot)}${parcial ? ` <span class="chip chip-ok">${brl(parcial)} recebido</span>` : ''}</td>
+      <td>${fmtBR(t.dataEntrada)}</td>
+      <td>${fmtBR(t.dataVenc)}</td>
+      <td class="num">${brl(t.valor)}</td>
+      <td class="num muted">${t.tipo === 'JUROS' ? '—' : fmtTaxa(taxaDa(t)) + '%'}</td>
+      <td>${t.jurosAte ? fmtBR(t.jurosAte) : '<span class="muted">—</span>'}</td>
+      <td class="num ${j.dias > 0 && Math.abs(j.efeito) > .005 ? 'warntxt' : 'muted'}">${j.dias > 0 && Math.abs(j.efeito) > .005 ? `${brl(j.efeito)}<div style="font-size:10px">${j.dias}d</div>` : '—'}</td>
+      <td><button class="iconbtn" title="Abrir" onclick="closeModal('ovExtrato');abrirTitulo('${t.id}')">✎</button></td></tr>`;
+  };
+
+  const abertos = p.abertos.filter(t => t.tipo !== 'JUROS');
+  const cabec = `<div class="stats" style="margin-bottom:12px">
+    <div class="stat"><div class="k">Total a receber</div><div class="v">${brl(p.total)}</div>
+      <div class="sub">principal + juros já apropriados</div></div>
+    <div class="stat"><div class="k">Principal</div><div class="v">${brl(p.principal)}</div>
+      <div class="sub">${abertos.length} item(ns) em aberto</div></div>
+    <div class="stat"><div class="k">Parcela de juros</div><div class="v pos">${brl(p.juros)}</div>
+      <div class="sub">${p.acertadoAte ? 'acertada até ' + fmtBR(p.acertadoAte) : 'ainda não apropriada'}</div></div>
+    <div class="stat"><div class="k">A apropriar</div><div class="v ${Math.abs(p.aApropriar) > .5 ? 'warntxt' : 'pos'}">${brl(p.aApropriar)}</div>
+      <div class="sub">corridos desde o último acerto</div></div>
+  </div>`;
+
+  const tabela = (titulo, sub, linhas) => !linhas.length ? '' :
+    `<div class="panel" style="margin-bottom:12px"><div class="panel-head"><h2 style="font-size:13px">${titulo}<small>${sub}</small></h2></div>
+      <div class="tbl-scroll"><table><thead><tr><th>O que é</th><th>De</th><th>Vence</th>
+        <th class="num">Valor</th><th class="num">Taxa</th><th>Juros até</th><th class="num">A apropriar</th><th></th></tr></thead>
+      <tbody>${linhas.map(linhaAberta).join('')}</tbody></table></div></div>`;
+
+  // a parcela de juros, aberta rodada por rodada
+  const parcelas = p.jurosTit.map(t => {
+    const comp = t.composicao || [];
+    const corpo = comp.length
+      ? comp.slice().reverse().map(r => `
+        <div class="l" style="font-weight:600"><span>Apropriação até ${fmtBR(r.ate)}</span>
+          <span class="pos">${brl(r.valor)}</span></div>
+        ${r.itens.map(i => `<div class="l"><span style="padding-left:14px" class="muted">
+            ${esc(i.tipo === 'ANTECIPACAO' ? numAntLabel(i.num) : i.nf ? 'NF ' + i.nf : 'Título')}
+            · enviada ${fmtBR(i.enviadaEm)} · ${brl(i.base)} · ${fmtTaxa(i.taxa)}% · ${i.dias}d desde ${fmtBR(i.desde)}</span>
+          <span>${brl(i.juros)}</span></div>`).join('')}`).join('')
+      : `<div class="conta">Esta parcela é anterior ao registro de composição, então não guarda o detalhe por antecipação.</div>`;
+    return `<div class="panel" style="margin-bottom:12px"><div class="panel-head">
+        <h2 style="font-size:13px">Parcela de juros<small>vence ${fmtBR(t.dataVenc)} · ${comp.length} apropriação(ões)</small></h2>
+        <div><b>${brl(t.valor)}</b>
+          <button class="btn btn-sm" style="margin-left:8px" onclick="closeModal('ovExtrato');abrirReceb('${t.id}')">Receber</button></div></div>
+      <div class="memo show" style="margin:0 14px 14px">${corpo}
+        ${recebidoParcial(t.id) ? `<div class="l tot"><span>Já abatido em parcelas</span><span class="pos">${brl(recebidoParcial(t.id))}</span></div>` : ''}
+        <div class="conta">Uma parcela só por cliente: cada apropriação nova soma aqui e empurra o vencimento
+          para a data do corte. O que o cliente mandar abate daqui primeiro.</div></div></div>`;
+  }).join('');
+
+  const baixados = !p.baixados.length ? '' :
+    `<div class="panel"><div class="panel-head"><h2 style="font-size:13px">Já encerrados<small>histórico do cliente</small></h2></div>
+      <div class="tbl-scroll"><table><thead><tr><th>O que é</th><th>Baixado em</th><th class="num">Valor</th><th>Situação</th></tr></thead>
+      <tbody>${p.baixados.slice().sort((a, b) => (b.dataReceb || '').localeCompare(a.dataReceb || '')).map(t => `<tr>
+        <td>${t.tipo === 'ANTECIPACAO' ? numAntLabel(t.numAntecipacao) : t.tipo === 'JUROS' ? 'Parcela de juros' : (t.nf ? 'NF ' + esc(t.nf) : 'Título')}</td>
+        <td>${fmtBR(t.dataReceb)}</td>
+        <td class="num">${brl(t.valorRecebido)}</td>
+        <td><span class="chip ${t.status === 'PERDA' ? 'chip-bad' : 'chip-ok'}">${STATUS_LABEL[t.status]}</span></td></tr>`).join('')}
+      </tbody></table></div></div>`;
+
+  const semParcela = Math.abs(p.aApropriar) > .5 && !p.jurosTit.length
+    ? `<div class="alert"><b>${brl(p.aApropriar)} de juros já corridos e ainda sem parcela.</b>
+       Apropriar cria a parcela de juros deste cliente, com vencimento na data do corte.
+       <button class="btn btn-sm right" onclick="closeModal('ovExtrato');abrirApropriar('${esc(p.nome).replace(/'/g, "\\'")}')">Apropriar</button></div>`
+    : '';
+
+  return cabec + semParcela + parcelas +
+    tabela('Em aberto', 'antecipações e títulos que ainda não voltaram', abertos) +
+    (p.captacao.length ? tabela('Recurso de terceiro', 'dele no seu caixa — não é a receber', p.captacao) : '') +
+    baixados;
 }
 
 /* =========================================================================
