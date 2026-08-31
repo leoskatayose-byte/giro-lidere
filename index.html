@@ -775,6 +775,16 @@ tbody tr{transition:.12s} tbody tr:hover{background:var(--panel2)}
     <div class="memo" id="pr_memo"></div>
     <div class="field"><label>Juros a cobrar</label><input type="number" step="0.01" min="0" id="pr_juros" oninput="prEditado()">
       <div class="hint">Vem do cálculo, mas continua editável — nem toda prorrogação sai pela tabela.</div></div>
+    <div class="field"><label>Tarifa de prorrogação</label>
+      <div class="fgrid">
+        <div><input type="number" step="0.01" min="0" id="pr_tarifa" oninput="prCalc(true)"></div>
+        <div><select id="pr_tarifaQuem" onchange="prCalc(true)">
+          <option value="CLIENTE">Cobrada do cliente (entra)</option>
+          <option value="BANCO">Custo do banco (sai)</option>
+          <option value="NAO">Sem tarifa nesta prorrogação</option>
+        </select></div>
+      </div>
+      <div class="hint" id="pr_tarifaHint"></div></div>
     <div class="field"><label>Como entra o juro</label>
       <select id="pr_forma">
         <option value="CAIXA">Recebido agora (entra no caixa)</option>
@@ -786,6 +796,26 @@ tbody tr{transition:.12s} tbody tr:hover{background:var(--panel2)}
   </div>
   <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal('ovProrrog')">Cancelar</button>
     <button class="btn btn-gold" onclick="salvarProrrog()">Prorrogar</button></div>
+</div></div>
+
+<!-- ===================== Baixa por perda ===================== -->
+<div class="overlay" id="ovPerda"><div class="modal">
+  <div class="modal-head"><h3>Dar baixa por perda</h3><button class="modal-x" onclick="closeModal('ovPerda')">×</button></div>
+  <div class="modal-body">
+    <input type="hidden" id="pd_id">
+    <div class="alert bad" id="pd_info"></div>
+    <div class="fgrid">
+      <div class="field"><label>Data da perda</label><input type="date" id="pd_data"></div>
+      <div class="field"><label>Valor perdido</label><input type="number" step="0.01" min="0.01" id="pd_valor" oninput="pdCalc()"></div>
+    </div>
+    <div class="memo" id="pd_memo"></div>
+    <div class="field"><label>Motivo</label><input id="pd_motivo" placeholder="Sacado não vai pagar, empresa fechou, acordo não cumprido..."></div>
+    <div class="field"><div class="hint">A perda não passa pelo caixa — dinheiro nenhum se move. O título sai do que
+      está na rua e o mesmo valor sai do resultado, como despesa. É o reconhecimento de que aquilo não volta.</div></div>
+    <div class="erro" id="pd_erro"></div>
+  </div>
+  <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal('ovPerda')">Cancelar</button>
+    <button class="btn btn-neg" onclick="salvarPerda()">Dar baixa por perda</button></div>
 </div></div>
 
 <!-- ===================== Cliente ===================== -->
@@ -1132,6 +1162,8 @@ function migrar() {
   DB.planoContas.forEach(c => { if (!c.servico) c.servico = 'AMBOS'; });
   if (typeof DB.config.taxaProrrogacao !== 'number') DB.config.taxaProrrogacao = 5;
   DB.config.baseProrrogacao = DB.config.baseProrrogacao === 'PERIODO' ? 'PERIODO' : 'MES';
+  if (typeof DB.config.tarifaProrrogacao !== 'number') DB.config.tarifaProrrogacao = 5;
+  DB.config.tarifaPagaPor = DB.config.tarifaPagaPor === 'BANCO' ? 'BANCO' : 'CLIENTE';
   // resíduo de seções que saíram do app
   ['principiosMeus', 'adotados', 'lidos', 'pendencias'].forEach(k => { delete DB[k]; });
 }
@@ -1173,7 +1205,7 @@ const TIPO_LABEL = {
   ANTECIPACAO_RETORNO: 'Retorno de antecipação', PRORROGACAO: 'Juros de prorrogação', TARIFA: 'Tarifa bancária',
   JUROS: 'Juros', RENDIMENTO: 'Rendimento', HONORARIOS: 'Honorários', CAPITAL_GIRO: 'Capital de giro',
   APORTE: 'Aporte', RETIRADA: 'Retirada', TRANSFERENCIA: 'Transferência', OUTRA_RECEITA: 'Outra receita',
-  OUTRA_DESPESA: 'Outra despesa', AJUSTE: 'Ajuste'
+  OUTRA_DESPESA: 'Outra despesa', AJUSTE: 'Ajuste', PERDA: 'Perda de título'
 };
 const CONTA_PADRAO_TIPO = {
   PRORROGACAO: 'receita_prorrogacao', RENDIMENTO: 'receita_rendimentos', OUTRA_RECEITA: 'receita_outras',
@@ -1188,6 +1220,7 @@ function chavePadrao(tipo, res) {
   if (tipo === 'RECEBIMENTO') return res ? 'receita_juros_recebimento' : 'patrimonial_recebimento_titulo';
   if (tipo === 'ANTECIPACAO_RETORNO') return !res ? 'patrimonial_antecipacao_retornada' : (res > 0 ? 'receita_retorno_antecipacao' : 'despesa_retorno_antecipacao');
   if (tipo === 'AJUSTE') return res > 0 ? 'receita_ajuste' : res < 0 ? 'despesa_ajuste' : 'patrimonial_ajuste';
+  if (tipo === 'PERDA') return 'despesa_perda';
   // Juros e honorários vão nos dois sentidos: o sinal do resultado é que diz
   // se aquilo entrou ou saiu. Sem isso, honorário recebido de BPO cai numa
   // conta de despesa e o serviço aparece com receita zero.
@@ -1210,11 +1243,12 @@ function servicoDaMov(m) {
 
 /* ===== Motor financeiro (espelha a versão anterior, número por número) ===== */
 function statusCalc(t) {
-  if (t.status === 'PAGO' || t.status === 'CANCELADO') return t.status;
+  if (t.status === 'PAGO' || t.status === 'CANCELADO' || t.status === 'PERDA') return t.status;
   if (t.dataVenc && t.dataVenc < hoje()) return 'VENCIDO';
   return 'A_VENCER';
 }
-const STATUS_LABEL = { A_VENCER: 'A vencer', VENCIDO: 'Vencido', PAGO: 'Pago', CANCELADO: 'Cancelado' };
+const STATUS_LABEL = { A_VENCER: 'A vencer', VENCIDO: 'Vencido', PAGO: 'Pago',
+  CANCELADO: 'Cancelado', PERDA: 'Perda' };
 const emAberto = t => ['A_VENCER', 'VENCIDO'].includes(statusCalc(t));
 
 function saldo(f, ate) {
@@ -1460,6 +1494,8 @@ function jurosAApropriar(t, ate) {
    Título que vai vencer ou já venceu ganha um prazo novo, e o prazo tem preço.
    Duas bases porque as duas existem no mercado: taxa ao mês repartida pelos
    dias (a mesma convenção das antecipações) ou taxa cheia no período. */
+const tarifaProrrogacao = () => (typeof DB.config.tarifaProrrogacao === 'number' && isFinite(DB.config.tarifaProrrogacao)) ? DB.config.tarifaProrrogacao : 5;
+const tarifaPagaPor = () => DB.config.tarifaPagaPor === 'BANCO' ? 'BANCO' : 'CLIENTE';
 const taxaProrrogacao = () => (typeof DB.config.taxaProrrogacao === 'number' && isFinite(DB.config.taxaProrrogacao)) ? DB.config.taxaProrrogacao : 5;
 function jurosProrrogacao(valor, taxa, dias, base) {
   if (!valor || !taxa || !dias || dias <= 0) return 0;
@@ -1956,6 +1992,7 @@ VIEWS.titulos = function () {
         <button class="iconbtn" title="Editar título" onclick="abrirTitulo('${t.id}')">✎</button>
         <button class="iconbtn" title="Aportar: pagamento que aumenta o título, sem virar despesa" onclick="abrirAporte('${t.id}')">↑</button>
         ${t.operacaoId && podeEditarOper(t.operacaoId) ? `<button class="iconbtn" title="Editar a operação inteira" onclick="abrirOper('${t.operacaoId}')">⧉</button>` : ''}
+        <button class="iconbtn" title="Dar baixa por perda: o título não vai ser pago" onclick="abrirPerda('${t.id}')">✕</button>
         <button class="btn btn-sm" title="Dar prazo novo e cobrar os juros do período" onclick="abrirProrrog('${t.id}')">Prorrogar</button>
         <button class="btn btn-sm btn-gold" onclick="abrirReceb('${t.id}')">Receber</button></div></td></tr>`).join('');
 
@@ -2032,6 +2069,7 @@ VIEWS.antecipacoes = function () {
       <td><span class="chip ${t.st === 'VENCIDO' ? 'chip-bad' : 'chip-n'}">${STATUS_LABEL[t.st]}</span>${chipParcial(t.id)}</td>
       <td><div class="acoes">
         <button class="iconbtn" title="Editar antecipação" onclick="abrirTitulo('${t.id}')">✎</button>
+        <button class="iconbtn" title="Dar baixa por perda: o recurso não vai voltar" onclick="abrirPerda('${t.id}')">✕</button>
         <button class="btn btn-sm" title="Adiar a data prevista de retorno" onclick="abrirProrrog('${t.id}')">Prorrogar</button>
         <button class="btn btn-sm btn-gold" onclick="abrirReceb('${t.id}')">Retorno</button></div></td></tr>`).join('');
 
@@ -2050,11 +2088,14 @@ VIEWS.antecipacoes = function () {
 /* ---------- Recebidos ---------- */
 VIEWS.recebidos = function () {
   const fs = fontesDoFiltro();
-  const lista = tits().filter(t => t.status === 'PAGO' && fs.includes(t.fonte)).map(t => ({
+  const lista = tits().filter(t => (t.status === 'PAGO' || t.status === 'PERDA') && fs.includes(t.fonte)).map(t => ({
     ...t,
     desagio: (t.valorBruto != null && t.valorLiquido != null) ? t.valorBruto - t.valorLiquido : null,
     atraso: (t.dataVenc && t.dataReceb) ? diasEntre(t.dataVenc, t.dataReceb) : null
   }));
+  const perdidos = lista.filter(t => t.status === 'PERDA');
+  const totPerda = perdidos.reduce((s, t) => s + Math.abs(movs().filter(m => m.tituloId === t.id && m.tipo === 'PERDA')
+    .reduce((a, m) => a + (m.resultado || 0), 0)), 0);
   const total = lista.reduce((s, t) => s + (t.valorRecebido || 0), 0);
   const comAtraso = lista.filter(t => t.atraso != null && t.atraso > 0);
   const medio = comAtraso.length ? comAtraso.reduce((s, t) => s + t.atraso, 0) / comAtraso.length : 0;
@@ -2063,7 +2104,7 @@ VIEWS.recebidos = function () {
     <div class="stat"><div class="k">Recebido</div><div class="v pos">${brl(total)}</div><div class="sub">${lista.length} título(s) baixados</div></div>
     <div class="stat"><div class="k">Pagos no dia ou antes</div><div class="v">${lista.filter(t => t.atraso != null && t.atraso <= 0).length}</div><div class="sub">de ${lista.filter(t => t.atraso != null).length} com as duas datas</div></div>
     <div class="stat"><div class="k">Atraso médio</div><div class="v ${medio > 3 ? 'neg' : ''}">${medio.toFixed(1).replace('.', ',')} d</div><div class="sub">só entre os que atrasaram</div></div>
-    <div class="stat"><div class="k">Deságio registrado</div><div class="v goldtxt">${brl(lista.reduce((s, t) => s + (t.desagio || 0), 0))}</div><div class="sub">nos títulos que carregam o lote</div></div>
+    <div class="stat"><div class="k">Perdido</div><div class="v ${totPerda ? 'neg' : 'pos'}">${brl(totPerda)}</div><div class="sub">${perdidos.length} título(s) dados como incobráveis</div></div>
   </div>`;
 
   const dados = ordena(filtra(lista, busca.receb, ['cliente', 'sacado', 'nf']), ordem.receb);
@@ -2073,12 +2114,14 @@ VIEWS.recebidos = function () {
       <td>${cliTag(t.cliente)}</td><td>${esc(t.sacado) || '<span class="muted">—</span>'}</td>
       <td>${t.tipo === 'ANTECIPACAO' ? `<span class="pill">${numAntLabel(t.numAntecipacao)}</span>` : (esc(t.nf) || '<span class="muted">—</span>')}</td>
       <td>${fmtBR(t.dataEntrada)}</td><td>${fmtBR(t.dataVenc)}</td>
-      <td>${fmtBR(t.dataReceb)}${t.atraso != null && t.atraso > 0 ? `<span class="chip chip-warn" style="margin-left:6px">+${t.atraso}d</span>` : ''}</td>
-      <td class="num">${brl(t.valorRecebido)}</td>
+      <td>${fmtBR(t.dataReceb)}${t.status === 'PERDA' ? '<span class="chip chip-bad" style="margin-left:6px">perda</span>'
+        : t.atraso != null && t.atraso > 0 ? `<span class="chip chip-warn" style="margin-left:6px">+${t.atraso}d</span>` : ''}</td>
+      <td class="num ${t.status === 'PERDA' ? 'neg' : ''}">${t.status === 'PERDA' ? brl(0) : brl(t.valorRecebido)}</td>
       <td class="num">${t.desagio != null ? brl(t.desagio) : '<span class="muted">—</span>'}</td>
       <td><div class="acoes">
         <button class="iconbtn" title="Corrigir cliente, sacado, NF ou datas" onclick="abrirTitulo('${t.id}')">✎</button>
-        <button class="btn btn-sm" title="Volta para a vencer e remove a entrada lançada" onclick="desfazerBaixa('${t.id}')">↩ Desfazer</button></div></td></tr>`).join('');
+        <button class="btn btn-sm" title="Volta para a vencer e remove ${t.status === 'PERDA' ? 'a despesa lançada' : 'a entrada lançada'}"
+          onclick="${t.status === 'PERDA' ? 'desfazerPerda' : 'desfazerBaixa'}('${t.id}')">↩ Desfazer</button></div></td></tr>`).join('');
 
   return stats +
     `<div class="filters">${segFonte()}${campoBusca('receb', 'Buscar cliente, sacado, NF...')}</div>
@@ -2396,6 +2439,12 @@ VIEWS.cadastros = function () {
       <select id="cfgBasePr" style="max-width:230px">
         <option value="MES" ${DB.config.baseProrrogacao === 'MES' ? 'selected' : ''}>ao mês, proporcional aos dias</option>
         <option value="PERIODO" ${DB.config.baseProrrogacao === 'PERIODO' ? 'selected' : ''}>cheia no período</option>
+      </select>
+      <label style="font-size:12.5px;color:var(--dim);margin-left:8px">Tarifa por prorrogação (R$)</label>
+      <input type="number" step="0.01" min="0" id="cfgTarifaPr" value="${tarifaProrrogacao()}" style="max-width:100px">
+      <select id="cfgTarifaQuem" style="max-width:190px">
+        <option value="CLIENTE" ${tarifaPagaPor() === 'CLIENTE' ? 'selected' : ''}>cobrada do cliente</option>
+        <option value="BANCO" ${tarifaPagaPor() === 'BANCO' ? 'selected' : ''}>custo do banco</option>
       </select>
       <button class="btn btn-sm" onclick="salvarTaxas()">Salvar taxas</button></div></div>`;
 
@@ -3199,12 +3248,14 @@ function setFonteVal(cod, campo, v) {
   f[campo] = n; save(); render(); toast('Saldo inicial atualizado');
 }
 function salvarTaxas() {
-  const a = num(val('cfgTaxa')), pr = num(val('cfgTaxaPr'));
-  if (!(a >= 0) || !(pr >= 0)) return toast('Informe taxas válidas');
+  const a = num(val('cfgTaxa')), pr = num(val('cfgTaxaPr')), tf = num(val('cfgTarifaPr'));
+  if (!(a >= 0) || !(pr >= 0) || !(tf >= 0)) return toast('Informe taxas válidas');
   DB.config.taxaAntecipacao = a;
   DB.config.taxaProrrogacao = pr;
   DB.config.baseProrrogacao = val('cfgBasePr');
-  save(); render(); toast(`Antecipação ${fmtTaxa(a)}% ao mês · prorrogação ${fmtTaxa(pr)}%`);
+  DB.config.tarifaProrrogacao = tf;
+  DB.config.tarifaPagaPor = val('cfgTarifaQuem');
+  save(); render(); toast(`Antecipação ${fmtTaxa(a)}% ao mês · prorrogação ${fmtTaxa(pr)}% + ${brl(tf)}`);
 }
 /* Formata o documento enquanto digita e avisa se os dígitos não fecham —
    avisa, não bloqueia: às vezes o número chega errado e o nome precisa entrar. */
@@ -3371,6 +3422,8 @@ function abrirProrrog(id) {
   setVal('pr_taxa', taxaProrrogacao());
   setVal('pr_base', DB.config.baseProrrogacao || 'MES');
   setVal('pr_forma', 'CAIXA');
+  setVal('pr_tarifa', tarifaProrrogacao());
+  setVal('pr_tarifaQuem', tarifaProrrogacao() > 0 ? tarifaPagaPor() : 'NAO');
   setVal('pr_dataJuro', hoje());
   setVal('pr_obs', '');
   prCalc();
@@ -3394,16 +3447,34 @@ function prCalc(soMemoria) {
   if (!soMemoria && !prEditadoAMao) setVal('pr_juros', j.toFixed(2));
   const informado = num(val('pr_juros'));
   const difere = isFinite(informado) && Math.abs(informado - j) > .005;
+  const tf = prTarifa();
   const conta = base === 'PERIODO'
     ? `${brl(t.valor)} × ${fmtTaxa(taxa)}% = ${brl(j)}`
     : `${brl(t.valor)} × ${fmtTaxa(taxa)}% ÷ 30 × ${dias} = ${brl(j)}`;
+  const jf = isFinite(informado) ? informado : j;
   box.innerHTML = `
     <div class="l"><span>De ${fmtBR(t.dataVenc)} para ${fmtBR(nova)}</span><span>${dias} dia(s)</span></div>
     <div class="l"><span>Taxa ${fmtTaxa(taxa)}%${base === 'PERIODO' ? ' no período' : ' ao mês, proporcional'}</span><span>${brl(j)}</span></div>
-    <div class="l tot"><span>Título + juros</span><span>${brl(t.valor + (isFinite(informado) ? informado : j))}</span></div>
+    ${tf.valor ? `<div class="l"><span>Tarifa ${tf.quem === 'BANCO' ? 'do banco' : 'cobrada do cliente'}</span>
+      <span class="${tf.quem === 'BANCO' ? 'neg' : 'pos'}">${brl(tf.quem === 'BANCO' ? -tf.valor : tf.valor)}</span></div>` : ''}
+    <div class="l"><span>Título + juros</span><span>${brl(t.valor + jf)}</span></div>
+    <div class="l tot"><span>Efeito no resultado</span>
+      <span class="${jf + tf.efeito < 0 ? 'neg' : 'pos'}">${brl(jf + tf.efeito)}</span></div>
     <div class="conta">${conta}</div>
     ${difere ? `<div style="margin-top:8px"><button type="button" class="btn btn-sm" onclick="prUsarCalculado(${j.toFixed(2)})">Usar o valor calculado (${brl(j)})</button></div>` : ''}`;
   box.classList.add('show');
+}
+/* A tarifa é um valor fixo, não uma taxa: R$ 5,00 por prorrogação, some ou
+   não o prazo. Vem preenchida do padrão e continua editável, porque nem toda
+   prorrogação carrega tarifa. */
+function prTarifa() {
+  const quem = val('pr_tarifaQuem'), v = quem === 'NAO' ? 0 : Math.max(0, num(val('pr_tarifa')) || 0);
+  const hint = el('pr_tarifaHint');
+  if (hint) hint.innerHTML = !v ? 'Sem tarifa nesta prorrogação.'
+    : quem === 'BANCO'
+      ? `<b>${brl(v)}</b> de custo: sai do caixa junto com a prorrogação e entra como Tarifas Bancárias.`
+      : `<b>${brl(v)}</b> cobrados do cliente junto com os juros, na mesma conta de Receita com Prorrogação.`;
+  return { valor: v, quem, efeito: quem === 'BANCO' ? -v : v };
 }
 function prUsarCalculado(v) { setVal('pr_juros', v.toFixed(2)); prEditadoAMao = false; prCalc(true); }
 function salvarProrrog() {
@@ -3417,6 +3488,10 @@ function salvarProrrog() {
   if (!(dias > 0)) return erro('pr_erro', 'A nova data precisa ser depois do vencimento atual.');
   if (!isFinite(j) || j < 0) return erro('pr_erro', 'Informe um valor de juros válido.');
   if (j > 0 && mesFechado(mesDe(dataJuro))) return erro('pr_erro', `${mesLabel(mesDe(dataJuro))} está fechado. Escolha outra data para o juro ou reabra o mês.`);
+
+  const tf = prTarifa();
+  if (tf.valor > 0 && mesFechado(mesDe(dataJuro)))
+    return erro('pr_erro', `${mesLabel(mesDe(dataJuro))} está fechado, e a tarifa precisa de uma data aberta.`);
 
   const vencAntigo = t.dataVenc;
   t.dataVenc = nova;
@@ -3438,8 +3513,99 @@ function salvarProrrog() {
       DB.movs.push({ ...comum, descricao: desc, entrada: j, saida: null });
     }
   }
+  // A tarifa é uma linha própria: junto com os juros ela some do razão, e é
+  // ela que o cliente pergunta depois ("de onde saíram esses cinco reais?").
+  if (tf.valor > 0) {
+    const doBanco = tf.quem === 'BANCO';
+    const conta = contaPorChave(doBanco ? 'despesa_tarifas' : 'receita_prorrogacao');
+    DB.movs.push({
+      id: uid(), seq: proximaSeq(), fonte: t.fonte, data: dataJuro,
+      tipo: doBanco ? 'TARIFA' : 'PRORROGACAO',
+      descricao: `Tarifa de prorrogação ${t.cliente}${t.nf ? ' — NF ' + t.nf : ''}`,
+      cliente: t.cliente, tituloId: t.id, operacaoId: null,
+      entrada: doBanco ? null : tf.valor, saida: doBanco ? tf.valor : null,
+      resultado: tf.efeito, contaId: conta ? conta.id : null, servico: null,
+      obs: 'Tarifa fixa da prorrogação', deletedAt: null
+    });
+  }
   save(); closeModal('ovProrrog'); render();
-  toast(j ? `Prorrogado para ${fmtBR(nova)} — juros de ${brl(j)}` : `Prorrogado para ${fmtBR(nova)}`);
+  const resumo = [j ? `juros de ${brl(j)}` : '', tf.valor ? `tarifa de ${brl(tf.valor)}` : ''].filter(Boolean).join(' + ');
+  toast(`Prorrogado para ${fmtBR(nova)}${resumo ? ' — ' + resumo : ''}`);
+}
+
+/* ---------- Baixa por perda ----------
+   Título que não vai ser pago não some nem fica eternamente vencido: vira
+   perda. Não passa pelo caixa (dinheiro nenhum se move), sai do que está na
+   rua e o mesmo valor sai do resultado como despesa. */
+function abrirPerda(id) {
+  const t = DB.titulos.find(x => x.id === id); if (!t) return;
+  if (!emAberto(t)) return toast('Só dá para dar baixa por perda em título que ainda está em aberto');
+  limpaErro('pd_erro');
+  setVal('pd_id', id);
+  const st = statusCalc(t), atraso = t.dataVenc ? diasEntre(t.dataVenc, hoje()) : null;
+  el('pd_info').innerHTML = `<span>${cliTag(t.cliente)}${t.sacado ? ' · sacado ' + esc(t.sacado) : ''}${t.nf ? ' · NF ' + esc(t.nf) : ''}
+    — em aberto <b>${brl(t.valor)}</b>${st === 'VENCIDO' ? `, vencido há ${atraso} dia(s)` : `, vence ${fmtBR(t.dataVenc)}`}</span>`;
+  setVal('pd_data', hoje());
+  setVal('pd_valor', t.valor);
+  setVal('pd_motivo', '');
+  pdCalc(); openModal('ovPerda'); setTimeout(() => el('pd_motivo').focus(), 60);
+}
+function pdCalc() {
+  const t = DB.titulos.find(x => x.id === val('pd_id')), box = el('pd_memo');
+  if (!t) return;
+  const v = num(val('pd_valor'));
+  if (!(v > 0)) { box.classList.remove('show'); return; }
+  const resta = +((t.valor || 0) - v).toFixed(2);
+  box.innerHTML = `<div class="l"><span>Sai do que está na rua</span><span class="neg">${brl(-v)}</span></div>
+    <div class="l"><span>Sai do caixa</span><span>${brl(0)}</span></div>
+    <div class="l tot"><span>Efeito no resultado</span><span class="neg">${brl(-v)}</span></div>
+    <div class="conta">${resta > .005
+      ? `Perda parcial: o título continua em aberto por ${brl(resta)}, para o caso de ainda receber alguma coisa.`
+      : v > (t.valor || 0) + .005
+        ? `A perda é maior que o saldo em aberto de ${brl(t.valor)}.`
+        : 'O título inteiro vira perda e sai da lista de abertos.'}</div>`;
+  box.classList.add('show');
+}
+function salvarPerda() {
+  limpaErro('pd_erro');
+  const t = DB.titulos.find(x => x.id === val('pd_id'));
+  if (!t) return erro('pd_erro', 'Título não encontrado.');
+  const data = val('pd_data'), v = num(val('pd_valor')), motivo = val('pd_motivo').trim();
+  if (!data || !(v > 0)) return erro('pd_erro', 'Informe data e valor da perda.');
+  if (v > (t.valor || 0) + .005)
+    return erro('pd_erro', `A perda de ${brl(v)} é maior que o saldo em aberto de ${brl(t.valor)}.`);
+  if (mesFechado(mesDe(data)))
+    return erro('pd_erro', `${mesLabel(mesDe(data))} está fechado. Reabra em Fechamento ou escolha outra data.`);
+
+  const total = Math.abs(v - (t.valor || 0)) < .005;
+  const conta = contaPorChave('despesa_perda');
+  t.valor = +((t.valor || 0) - v).toFixed(2);
+  if (total) { t.status = 'PERDA'; t.dataReceb = data; t.valorRecebido = 0; }
+  t.obs = (t.obs ? t.obs + ' | ' : '') + `Perda de ${brl(v)} em ${fmtBR(data)}` + (motivo ? ` — ${motivo}` : '');
+  DB.movs.push({
+    id: uid(), seq: proximaSeq(), fonte: t.fonte, data, tipo: 'PERDA',
+    descricao: `Perda ${t.cliente}${t.nf ? ' — NF ' + t.nf : ''}${motivo ? ' — ' + motivo : ''}`,
+    cliente: t.cliente, tituloId: t.id, operacaoId: null,
+    // não passa pelo caixa: o dinheiro nunca chegou
+    entrada: null, saida: null, resultado: -v,
+    contaId: conta ? conta.id : null, servico: null,
+    obs: motivo || 'Título dado como incobrável', deletedAt: null
+  });
+  save(); closeModal('ovPerda'); render();
+  toast(total ? `Perda de ${brl(v)} registrada — título baixado` : `Perda de ${brl(v)} — restam ${brl(t.valor)} em aberto`);
+}
+function desfazerPerda(id) {
+  const t = DB.titulos.find(x => x.id === id); if (!t) return;
+  const linhas = movs().filter(m => m.tituloId === id && m.tipo === 'PERDA');
+  if (!linhas.length) return;
+  if (bloqueadoPorFechamento(linhas[linhas.length - 1].data)) return;
+  const soma = linhas.reduce((s, m) => s + Math.abs(m.resultado || 0), 0);
+  confirmar(`Desfazer a perda de ${brl(soma)} de ${t.cliente}? O título volta para a vencer e a despesa sai do resultado.`, () => {
+    t.valor = +((t.valor || 0) + soma).toFixed(2);
+    t.status = 'A_VENCER'; t.dataReceb = null; t.valorRecebido = null;
+    DB.movs = DB.movs.filter(m => !(m.tituloId === id && m.tipo === 'PERDA'));
+    save(); render(); toast('Perda desfeita — título voltou para a vencer');
+  }, 'Desfazer perda');
 }
 
 /* ============================ IMPORTAÇÃO DE EXTRATO ============================
