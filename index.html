@@ -369,6 +369,8 @@ tbody tr{transition:.12s} tbody tr:hover{background:var(--panel2)}
 .cal .pt.late{box-shadow:0 0 0 1.5px var(--neg)}
 .cal .mais{font-size:8.5px;color:var(--mut);font-style:normal;line-height:7px}
 .cal .tot{position:absolute;right:6px;bottom:4px;font-size:9px;color:var(--mut);font-variant-numeric:tabular-nums}
+tr.apoff{opacity:.4}
+tr.apoff .inl{opacity:.7}
 .agpe{font-size:11.5px;color:var(--mut);margin-top:8px;text-align:center}
 .agpe b{color:var(--dim)}
 
@@ -1015,6 +1017,14 @@ tbody tr{transition:.12s} tbody tr:hover{background:var(--panel2)}
       <div class="field"><label>Cliente</label><select id="ap_cliente" onchange="calcApropriar()"></select></div>
       <div class="field"><label>Apropriar até</label><input type="date" id="ap_ate" oninput="calcApropriar()" onchange="calcApropriar()"></div>
     </div>
+    <div class="filters" style="margin:0 0 10px">
+      <button class="btn btn-sm" onclick="apMarcar(true)">Marcar todos</button>
+      <button class="btn btn-sm" onclick="apMarcar(false)">Desmarcar todos</button>
+      <span style="flex:1"></span>
+      <label style="font-size:12.5px;color:var(--dim)">Aplicar taxa aos marcados</label>
+      <input type="number" step="0.01" min="0" id="ap_taxaTodos" style="max-width:88px" placeholder="% ao mês">
+      <button class="btn btn-sm" onclick="apTaxaTodos()">Aplicar</button>
+    </div>
     <div id="ap_previa"></div>
     <div id="ap_rodape"></div>
     <div class="field"><label>O que fazer com os juros</label>
@@ -1023,6 +1033,7 @@ tbody tr{transition:.12s} tbody tr:hover{background:var(--panel2)}
         <option value="SOMAR">Somar ao valor de cada antecipação</option>
       </select>
       <div class="hint" id="ap_hint"></div></div>
+    <div id="ap_contas"></div>
     <div class="memo" id="ap_efeito"></div>
     <div class="erro" id="ap_erro"></div>
   </div>
@@ -1505,15 +1516,25 @@ function checaDoc(v) {
    O sinal vem do próprio valor: título positivo é dinheiro na rua e os juros
    são receita; título negativo é recurso de terceiro na mão da empresa, e os
    juros são despesa. A fórmula é a mesma. */
-const jurosDesde = t => t.jurosAte || t.dataEntrada;
-function jurosAApropriar(t, ate) {
+/* Antecipação rende desde que o dinheiro saiu; título de cliente só rende
+   depois de vencer — antes disso o prazo é o combinado, não atraso. */
+const naRua = t => t.tipo === 'ANTECIPACAO' || ehCaptacao(t);
+const jurosDesde = t => t.jurosAte || (naRua(t) ? t.dataEntrada : (t.dataVenc || t.dataEntrada));
+function jurosAApropriar(t, ate, taxaEscolhida) {
   const desde = jurosDesde(t);
   const dias = diasEntre(desde, ate);
-  const taxa = taxaDa(t);
+  const taxa = (typeof taxaEscolhida === 'number' && isFinite(taxaEscolhida)) ? taxaEscolhida : taxaDa(t);
   const bruto = dias > 0 ? juros(t.valor || 0, taxa, dias) : 0;
   // Na captação o juro é custo: aumenta o que se deve e reduz o resultado.
   // Na antecipação é o contrário. O sinal aqui é o que separa os dois mundos.
   return { desde, dias, taxa, juros: bruto, custo: ehCaptacao(t), efeito: ehCaptacao(t) ? -bruto : bruto };
+}
+/* A conta do juro depende da natureza do que rendeu, não do sinal: recurso que
+   volta de antecipação tem conta própria; juro de título de cliente é juro. */
+function chaveJuros(t) {
+  if (ehCaptacao(t)) return 'despesa_juros';
+  if (t.tipo === 'ANTECIPACAO') return 'receita_retorno_antecipacao';
+  return 'receita_juros';
 }
 
 /* ===== Prorrogação =====
@@ -4637,127 +4658,222 @@ function salvarReclass() {
    fica igual. Fecha também.
    ========================================================================= */
 
-/* ---------- Apropriar juros ---------- */
-let apJuros = { linhas: [], cliente: '', ate: '' };
+/* ---------- Apropriar juros ----------
+   A lista traz tudo que pode render — antecipação, captação e título de
+   cliente já vencido — e quem escolhe o que entra é quem está lançando. A
+   taxa de cada linha é editável ali mesmo, porque nem todo cliente tem a
+   mesma, e a conta contábil sai da natureza de cada um: retorno de
+   antecipação numa conta, juro de título em outra, custo de captação numa
+   terceira. Por isso o razão pode sair com mais de uma linha. */
+let apJuros = { linhas: [], cliente: '', ate: '', sel: {}, taxas: {} };
 
 function abrirApropriar(cliente) {
   const ate = hoje();
   setVal('ap_ate', ate);
+  const cands = apCandidatos(ate, '');
   el('ap_cliente').innerHTML = `<option value="">Todos os clientes</option>` +
-    [...new Set(tits().filter(t => (t.tipo === 'ANTECIPACAO' || ehCaptacao(t)) && emAberto(t)).map(t => t.cliente))]
+    [...new Set(cands.map(t => t.cliente))]
       .sort((a, b) => a.localeCompare(b, 'pt-BR'))
       .map(c => `<option value="${esc(c)}" ${c === cliente ? 'selected' : ''}>${esc(c)}</option>`).join('');
   setVal('ap_destino', 'SEPARADO');
+  setVal('ap_taxaTodos', '');
+  apJuros.sel = {}; apJuros.taxas = {};
   limpaErro('ap_erro');
   calcApropriar();
   openModal('ovApropriar');
 }
+
+/* Tudo que pode ter juros a reconhecer até a data. */
+function apCandidatos(ate, cli) {
+  return tits().filter(t => emAberto(t) && (!cli || t.cliente === cli))
+    .filter(t => naRua(t) || (t.dataVenc && jurosDesde(t) < ate));
+}
+
+/* Antecipação e captação já vêm marcadas — é o que a tela sempre fez. Título
+   de cliente entra desmarcado: cobrar mora é decisão, não automatismo. */
+const apPadraoMarcado = t => naRua(t);
+function apMarcado(t) {
+  return apJuros.sel[t.id] === undefined ? apPadraoMarcado(t) : !!apJuros.sel[t.id];
+}
+function apAlterna(id, on) { apJuros.sel[id] = on; calcApropriar(); }
+function apMarcar(on) {
+  apJuros.linhas.forEach(x => { apJuros.sel[x.t.id] = on; });
+  calcApropriar();
+}
+function apTaxa(id, v) {
+  const n = num(v);
+  if (isFinite(n) && n >= 0) apJuros.taxas[id] = n; else delete apJuros.taxas[id];
+  calcApropriar();
+}
+function apTaxaTodos() {
+  const n = num(val('ap_taxaTodos'));
+  if (!isFinite(n) || n < 0) return toast('Informe uma taxa válida');
+  apJuros.linhas.filter(x => x.on).forEach(x => { apJuros.taxas[x.t.id] = n; });
+  calcApropriar();
+  toast(`Taxa de ${fmtTaxa(n)}% aplicada aos marcados`);
+}
+
 function calcApropriar() {
   const ate = val('ap_ate'), cli = val('ap_cliente');
   apJuros.ate = ate; apJuros.cliente = cli;
-  apJuros.linhas = tits()
-    .filter(t => (t.tipo === 'ANTECIPACAO' || ehCaptacao(t)) && emAberto(t) && (!cli || t.cliente === cli))
-    .map(t => ({ t, ...jurosAApropriar(t, ate) }))
-    .filter(x => x.dias > 0 && Math.abs(x.efeito) > .005)
-    .sort((a, b) => (a.t.dataEntrada || '').localeCompare(b.t.dataEntrada || ''));
+  apJuros.linhas = apCandidatos(ate, cli)
+    .map(t => ({ t, on: apMarcado(t), ...jurosAApropriar(t, ate, apJuros.taxas[t.id]) }))
+    .filter(x => x.dias > 0 && Math.abs(x.juros) > .005)
+    .sort((a, b) => (a.desde || '').localeCompare(b.desde || ''));
 
-  const total = apJuros.linhas.reduce((s, x) => s + x.efeito, 0);
-  const naRua = apJuros.linhas.reduce((s, x) => s + (x.t.valor || 0), 0);
+  const marcadas = apJuros.linhas.filter(x => x.on);
+  const total = marcadas.reduce((s, x) => s + x.efeito, 0);
+  const emAberto2 = marcadas.reduce((s, x) => s + (x.t.valor || 0), 0);
+
   if (!apJuros.linhas.length) {
     el('ap_previa').innerHTML = `<div class="empty">Nada a apropriar até ${fmtBR(ate)}${cli ? ' para ' + esc(cli) : ''}.
-      Ou os juros já foram reconhecidos até essa data, ou não há antecipação em aberto.</div>`;
-    el('ap_rodape').innerHTML = ''; return;
+      Ou os juros já foram reconhecidos até essa data, ou não há nada em aberto rendendo.</div>`;
+    el('ap_rodape').innerHTML = ''; el('ap_contas').innerHTML = '';
+    el('ap_efeito').classList.remove('show');
+    return;
   }
-  el('ap_previa').innerHTML = `<div class="tbl-scroll" style="max-height:38vh;overflow-y:auto"><table>
-    <thead><tr><th>Cliente</th><th>Enviada</th><th>Juros desde</th><th class="num">Dias</th>
-      <th class="num">Valor</th><th class="num">Taxa</th><th>Natureza</th><th class="num">Juros</th></tr></thead>
-    <tbody>${apJuros.linhas.map(x => `<tr>
-      <td>${cliTag(x.t.cliente)}</td>
-      <td>${fmtBR(x.t.dataEntrada)}</td>
+  el('ap_previa').innerHTML = `<div class="tbl-scroll" style="max-height:36vh;overflow-y:auto"><table>
+    <thead><tr><th style="width:28px"></th><th>Cliente</th><th>O que é</th><th>Juros desde</th><th class="num">Dias</th>
+      <th class="num">Em aberto</th><th class="num" style="width:92px">Taxa % mês</th><th class="num">Juros</th></tr></thead>
+    <tbody>${apJuros.linhas.map(x => `<tr class="${x.on ? '' : 'apoff'}">
+      <td><input type="checkbox" ${x.on ? 'checked' : ''} onchange="apAlterna('${x.t.id}', this.checked)"></td>
+      <td>${cliTag(x.t.cliente)}${x.t.sacado && x.t.sacado !== x.t.cliente ? `<div class="muted" style="font-size:10px">sacado ${esc(x.t.sacado)}</div>` : ''}</td>
+      <td>${apNatureza(x.t)}</td>
       <td>${fmtBR(x.desde)}${x.t.jurosAte ? ' <span class="chip chip-ok">já apropriado antes</span>' : ''}</td>
       <td class="num">${x.dias}</td>
-      <td class="num ${x.t.valor < 0 ? 'neg' : ''}">${brl(x.t.valor)}</td>
-      <td class="num muted">${fmtTaxa(x.taxa)}%</td>
-      <td>${x.custo ? '<span class="chip chip-bad">custo</span>' : '<span class="chip chip-ok">receita</span>'}</td>
+      <td class="num">${brl(x.t.valor)}</td>
+      <td class="num"><input type="number" step="0.01" min="0" class="inl inl-xs" value="${x.taxa}"
+        onchange="apTaxa('${x.t.id}', this.value)"></td>
       <td class="num ${x.efeito < 0 ? 'neg' : 'pos'}">${brl(x.efeito)}</td></tr>`).join('')}
     </tbody></table></div>`;
-  el('ap_rodape').innerHTML = `<div class="somatit ${total < 0 ? 'erro' : 'ok'}">
-    ${apJuros.linhas.length} antecipação(ões) · ${brl(naRua)} na rua ·
+  el('ap_rodape').innerHTML = `<div class="somatit ${!marcadas.length ? 'erro' : total < 0 ? 'erro' : 'ok'}">
+    ${marcadas.length} de ${apJuros.linhas.length} marcado(s) · ${brl(emAberto2)} em aberto ·
     juros a reconhecer: <b>${brl(total)}</b>${total < 0 ? ' (despesa — recurso de terceiro)' : ''}</div>`;
   atualizaDestino();
 }
+
+function apNatureza(t) {
+  if (ehCaptacao(t)) return '<span class="chip chip-bad">captação — custo</span>';
+  if (t.tipo === 'ANTECIPACAO') return `<span class="chip chip-ok">antecipação</span>`;
+  return `<span class="chip chip-n">título${t.nf ? ' ' + esc(t.nf) : ''}</span>`;
+}
+
+/* Uma linha de razão por conta: misturar retorno de antecipação com juro de
+   título num lançamento só apagaria justamente a informação que o plano de
+   contas existe para guardar. */
+function apPorConta() {
+  const g = {};
+  apJuros.linhas.filter(x => x.on).forEach(x => {
+    const ch = chaveJuros(x.t);
+    (g[ch] = g[ch] || { chave: ch, conta: contaPorChave(ch), linhas: [], porFonte: {} });
+    g[ch].linhas.push(x);
+    (g[ch].porFonte[x.t.fonte] = g[ch].porFonte[x.t.fonte] || []).push(x.efeito);
+  });
+  // arredonda por fonte, como o salvar faz — senão a prévia sai um centavo
+  // diferente do que vai ser lançado
+  return Object.values(g).map(x => ({
+    ...x,
+    total: +Object.values(x.porFonte)
+      .reduce((s, arr) => s + +arr.reduce((a, v) => a + v, 0).toFixed(2), 0).toFixed(2)
+  }));
+}
+
 function atualizaDestino() {
-  const total = apJuros.linhas.reduce((s, x) => s + x.efeito, 0);
+  const marcadas = apJuros.linhas.filter(x => x.on);
+  const total = +marcadas.reduce((s, x) => s + x.efeito, 0).toFixed(2);
   const destino = val('ap_destino');
-  const conta = contaPorChave(total >= 0 ? 'receita_juros' : 'despesa_juros');
+  const grupos = apPorConta();
   el('ap_hint').innerHTML = destino === 'SEPARADO'
-    ? `Cria <b>um título só</b> de ${brl(total)} a receber, com vencimento em ${fmtBR(val('ap_ate'))}.
+    ? `Cria <b>um título de juros a receber por conta</b>, com vencimento em ${fmtBR(val('ap_ate'))}.
        Como ele vence antes das antecipações, aparece primeiro na lista — e é o primeiro a ser amortizado quando o cliente mandar recurso.`
-    : `Soma os juros ao valor de <b>cada antecipação</b>. Simples, mas os juros deixam de ser cobráveis em separado.`;
-  el('ap_efeito').innerHTML = `<div class="l"><span>Na rua (títulos)</span><span class="${total < 0 ? 'neg' : 'pos'}">${brl(total)}</span></div>
+    : `Soma os juros ao valor de <b>cada título</b>. Simples, mas os juros deixam de ser cobráveis em separado.`;
+  el('ap_contas').innerHTML = !grupos.length ? '' :
+    `<div class="memo show"><div class="l" style="font-weight:600"><span>Vai para o plano de contas assim</span><span></span></div>
+      ${grupos.map(g => `<div class="l"><span>${esc(g.conta ? g.conta.nome : g.chave)}
+        <i class="muted" style="font-style:normal">· ${g.linhas.length} lançamento(s)</i></span>
+        <span class="${g.total < 0 ? 'neg' : 'pos'}">${brl(g.total)}</span></div>`).join('')}
+      <div class="conta">A conta sai da natureza de cada linha: antecipação vai para retorno de antecipação,
+        título de cliente vai para juros, e captação vira custo.</div></div>`;
+  el('ap_efeito').innerHTML = `<div class="l"><span>Em aberto (títulos)</span><span class="${total < 0 ? 'neg' : 'pos'}">${brl(total)}</span></div>
     <div class="l"><span>Montante</span><span class="${total < 0 ? 'neg' : 'pos'}">${brl(total)}</span></div>
     <div class="l"><span>Caixa</span><span class="muted">não se move</span></div>
     <div class="l tot"><span>Conciliação</span><span class="pos">continua fechando</span></div>
-    <div class="conta">Entra no razão como "${esc(conta ? conta.nome : 'Juros')}" em ${fmtBR(val('ap_ate'))}, sem passar pelo caixa.</div>`;
+    <div class="conta">Nada passa pelo caixa: só o direito cresce, e o montante acompanha.
+      A taxa que você ajustar aqui fica gravada no título para as próximas apropriações.</div>`;
   el('ap_efeito').classList.add('show');
 }
+
 function salvarApropriar() {
   limpaErro('ap_erro');
   const ate = val('ap_ate'), destino = val('ap_destino');
   if (!ate) return erro('ap_erro', 'Informe a data de corte.');
-  if (!apJuros.linhas.length) return erro('ap_erro', 'Não há juros a apropriar nesse período.');
+  const marcadas = apJuros.linhas.filter(x => x.on);
+  if (!marcadas.length) return erro('ap_erro', 'Marque pelo menos um título para apropriar.');
   if (mesFechado(mesDe(ate)))
     return erro('ap_erro', `${mesLabel(mesDe(ate))} está fechado. Reabra em Fechamento ou escolha outra data de corte.`);
 
-  const bruto = +apJuros.linhas.reduce((s, x) => s + x.efeito, 0).toFixed(2);
-  const conta = contaPorChave(bruto >= 0 ? 'receita_juros' : 'despesa_juros');
+  const bruto = +marcadas.reduce((s, x) => s + x.efeito, 0).toFixed(2);
   const cli = apJuros.cliente;
   // O lançamento de resultado tem que valer exatamente o que foi aplicado nos
   // títulos, centavo a centavo — somar por fora arredondaria diferente e a
   // conciliação fecharia com um centavo de sobra.
-  const porFonte = {};
-  const efeito = (fonte, v) => { porFonte[fonte] = +((porFonte[fonte] || 0) + v).toFixed(2); };
+  const acum = {};
+  const efeito = (fonte, chave, v) => {
+    const k = fonte + '|' + chave;
+    acum[k] = { fonte, chave, valor: +((acum[k] ? acum[k].valor : 0) + v).toFixed(2) };
+  };
 
   if (destino === 'SEPARADO') {
-    // Um título de juros por fonte — misturar fontes num título só faria a
-    // conciliação de cada uma parar de fechar separadamente.
-    const fontes = [...new Set(apJuros.linhas.map(x => x.t.fonte))];
-    fontes.forEach(fonte => {
-      const doGrupo = apJuros.linhas.filter(x => x.t.fonte === fonte && !x.custo);
-      if (!doGrupo.length) return;
-      const valorRec = +doGrupo.reduce((s, x) => s + x.efeito, 0).toFixed(2);
-      const nome = cli || (new Set(doGrupo.map(x => x.t.cliente)).size === 1 ? doGrupo[0].t.cliente : 'Vários clientes');
-      efeito(fonte, valorRec);
+    // Um título por fonte E por conta: misturar fontes faria a conciliação de
+    // cada uma parar de fechar, e misturar contas apagaria a categoria.
+    const grupos = {};
+    marcadas.filter(x => !x.custo).forEach(x => {
+      const k = x.t.fonte + '|' + chaveJuros(x.t);
+      (grupos[k] = grupos[k] || { fonte: x.t.fonte, chave: chaveJuros(x.t), linhas: [] }).linhas.push(x);
+    });
+    Object.values(grupos).forEach(g => {
+      const valorRec = +g.linhas.reduce((s, x) => s + x.efeito, 0).toFixed(2);
+      const nomes = new Set(g.linhas.map(x => x.t.cliente));
+      const nome = cli || (nomes.size === 1 ? g.linhas[0].t.cliente : 'Vários clientes');
+      const conta = contaPorChave(g.chave);
+      efeito(g.fonte, g.chave, valorRec);
       DB.titulos.push({
-        id: uid(), fonte, cliente: cli || nome, sacado: '', tipo: 'JUROS',
+        id: uid(), fonte: g.fonte, cliente: nome, sacado: '', tipo: 'JUROS',
         nf: '', emissao: 'NA', dataEntrada: ate, dataVenc: ate,
         valorBruto: null, valorLiquido: null, valor: valorRec, status: 'A_VENCER',
         dataReceb: null, valorRecebido: null,
-        obs: `Juros apropriados de ${doGrupo.length} antecipação(ões) até ${fmtBR(ate)}`,
+        // a categoria fica no próprio título, não só no lançamento
+        contaId: conta ? conta.id : null,
+        obs: `${conta ? conta.nome : 'Juros'} — ${g.linhas.length} lançamento(s) até ${fmtBR(ate)}`,
         operacaoId: null, numAntecipacao: null, taxaMensal: null, jurosAte: null, deletedAt: null
       });
     });
     // Captação nunca vira título a receber: dizer que há mais a receber por
     // causa de um custo seria mentir. O juro devido engorda a própria dívida.
-    apJuros.linhas.filter(x => x.custo).forEach(x => {
+    marcadas.filter(x => x.custo).forEach(x => {
       const antes = x.t.valor;
       x.t.valor = +(antes + x.juros).toFixed(2);
-      efeito(x.t.fonte, -(x.t.valor - antes));
+      efeito(x.t.fonte, chaveJuros(x.t), -(x.t.valor - antes));
     });
   } else {
-    apJuros.linhas.forEach(x => {
+    marcadas.forEach(x => {
       const antes = x.t.valor;
       x.t.valor = +(antes + x.juros).toFixed(2);
       const aplicado = +(x.t.valor - antes).toFixed(2);
-      efeito(x.t.fonte, x.custo ? -aplicado : aplicado);
+      efeito(x.t.fonte, chaveJuros(x.t), x.custo ? -aplicado : aplicado);
     });
   }
-  apJuros.linhas.forEach(x => { x.t.jurosAte = ate; });
+  // a taxa escolhida na tela fica valendo daqui para a frente
+  marcadas.forEach(x => {
+    x.t.jurosAte = ate;
+    if (apJuros.taxas[x.t.id] !== undefined) x.t.taxaMensal = apJuros.taxas[x.t.id];
+  });
 
-  Object.entries(porFonte).forEach(([fonte, valor]) => {
+  Object.values(acum).forEach(({ fonte, chave, valor }) => {
+    const conta = contaPorChave(chave);
     DB.movs.push({
-      id: uid(), seq: proximaSeq(), fonte, data: ate, tipo: valor >= 0 ? 'JUROS' : 'JUROS',
-      descricao: `Apropriação de juros${cli ? ' — ' + cli : ''} até ${fmtBR(ate)}`,
+      id: uid(), seq: proximaSeq(), fonte, data: ate, tipo: 'JUROS',
+      descricao: `${conta ? conta.nome : 'Juros'}${cli ? ' — ' + cli : ''} até ${fmtBR(ate)}`,
       cliente: cli || '', tituloId: null, operacaoId: null,
       // não passa pelo caixa: o dinheiro ainda não voltou, só o direito cresceu
       entrada: null, saida: null, resultado: valor,
@@ -4766,7 +4882,7 @@ function salvarApropriar() {
     });
   });
   save(); closeModal('ovApropriar'); render();
-  toast(`Juros de ${brl(bruto)} apropriados até ${fmtBR(ate)}`);
+  toast(`Juros de ${brl(bruto)} apropriados até ${fmtBR(ate)} em ${Object.keys(acum).length} lançamento(s)`);
 }
 
 /* ---------- Aportar em título ----------
