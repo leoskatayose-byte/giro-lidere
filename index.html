@@ -1999,6 +1999,10 @@ function acoesRazao(m) {
   if (m.loteApropriacao && loteApropriacao(m.loteApropriacao))
     return rc + `<button class="iconbtn" title="Desfazer esta apropriação de juros por inteiro"
       onclick="desfazerApropriacao('${m.loteApropriacao}')">↺</button>`;
+  // apropriação anterior ao registro de lote: reconstruída pelo razão
+  if (ehMovApropriacao(m))
+    return rc + `<button class="iconbtn" title="Desfazer esta apropriação de juros (reconstruída pelo razão)"
+      onclick="desfazerApropriacaoAntiga('${m.id}')">↺</button>`;
   if (!TIPOS_ESTRUTURAIS.includes(m.tipo))
     return rc + `<button class="iconbtn" title="Editar" onclick="abrirLanc('${m.id}')">✎</button>
             <button class="iconbtn del" title="Excluir" onclick="excluirLanc('${m.id}')">🗑</button>`;
@@ -4993,17 +4997,110 @@ function desfazerApropriacao(loteId) {
   }, 'Desfazer apropriação');
 }
 
+/* ---------- Apropriação antiga, sem registro de lote ----------
+   As apropriações feitas antes de existir o lote não guardaram como estava
+   antes. Dá para reconstruir com segurança quando os juros viraram título
+   separado: ali os títulos originais não mudaram de valor, então desfazer é
+   remover o título de juros, remover o lançamento e devolver o relógio de
+   juros para a apropriação anterior (ou para nada, se não houve). Quando os
+   juros foram somados a cada título, o valor original se perdeu no meio — e
+   aí é mais honesto recusar do que chutar. */
+const ehMovApropriacao = m => m.tipo === 'JUROS' && m.obs === 'Juros reconhecidos por competência';
+
+function reconstruirApropriacao(movId) {
+  const m = DB.movs.find(x => x.id === movId && !x.deletedAt);
+  if (!m || !ehMovApropriacao(m)) return null;
+  const ate = m.data, fonte = m.fonte;
+
+  // todos os lançamentos daquela mesma apropriação (uma por conta e fonte)
+  const irmaos = movs().filter(x => ehMovApropriacao(x) && x.data === ate && !x.loteApropriacao);
+  const daFonte = irmaos.filter(x => x.fonte === fonte);
+
+  // títulos que tiveram o relógio marcado naquela data
+  const alvos = tits().filter(t => t.jurosAte === ate && t.fonte === fonte);
+  // títulos de juros nascidos ali
+  const criados = tits().filter(t => t.tipo === 'JUROS' && t.dataEntrada === ate
+    && t.dataVenc === ate && t.fonte === fonte && !t.loteApropriacao);
+
+  const total = +daFonte.reduce((s, x) => s + (x.resultado || 0), 0).toFixed(2);
+  const somouNoTitulo = total > 0 && !criados.length;
+  const recebidos = criados.filter(t => t.status === 'PAGO' || recebidoParcial(t.id) > 0);
+
+  // até onde os juros iam antes: a apropriação anterior desta mesma fonte
+  const anteriores = movs()
+    .filter(x => ehMovApropriacao(x) && x.fonte === fonte && x.data < ate)
+    .map(x => x.data).sort();
+  const voltarPara = anteriores.length ? anteriores[anteriores.length - 1] : null;
+
+  return { ate, fonte, movs: daFonte, alvos, criados, total, somouNoTitulo, recebidos, voltarPara };
+}
+
+function desfazerApropriacaoAntiga(movId) {
+  const r = reconstruirApropriacao(movId);
+  if (!r) return toast('Esse lançamento não é uma apropriação de juros');
+  if (bloqueadoPorFechamento(r.ate)) return;
+  if (r.recebidos.length)
+    return toast(`O título de juros de ${r.recebidos[0].cliente} já teve recebimento. Desfaça a baixa antes.`);
+  if (r.somouNoTitulo)
+    return toast('Essa apropriação somou os juros dentro de cada título e é antiga demais para reconstruir. '
+      + 'Corrija o valor no editor do título, e depois exclua este lançamento.');
+
+  const cap = r.alvos.filter(t => ehCaptacao(t));
+  confirmar(`Desfazer a apropriação de ${brl(r.total)} de ${fmtBR(r.ate)} em ${esc(rotuloFonte(r.fonte))}?
+    <br><br>Esta é anterior ao registro de desfazer, então foi reconstruída pelo razão:
+    <br>• ${r.criados.length} título(s) de juros criado(s) ali serão removidos
+    <br>• ${r.alvos.length} título(s) voltam a render ${r.voltarPara ? 'desde ' + fmtBR(r.voltarPara) : 'desde a data de origem'}
+    <br>• ${r.movs.length} lançamento(s) saem do resultado
+    ${cap.length ? `<br>• ${cap.length} captação(ões) terão o custo devolvido pelo cálculo` : ''}
+    <br><br>Confira os números antes de confirmar.`, () => {
+    // captação teve o valor engordado pelo juro: desfaz pelo mesmo cálculo
+    cap.forEach(t => {
+      const desde = r.voltarPara || t.dataEntrada;
+      const dias = diasEntre(desde, r.ate);
+      if (dias > 0) t.valor = +(t.valor / (1 + fatorJuros(taxaDa(t), dias))).toFixed(2);
+    });
+    r.alvos.forEach(t => { if (r.voltarPara) t.jurosAte = r.voltarPara; else delete t.jurosAte; });
+    const fora = new Set(r.criados.map(t => t.id));
+    DB.titulos = DB.titulos.filter(t => !fora.has(t.id));
+    const foraM = new Set(r.movs.map(x => x.id));
+    DB.movs = DB.movs.filter(x => !foraM.has(x.id));
+    save(); render();
+    const c = conc(r.fonte);
+    toast(c.bate ? `Apropriação de ${brl(r.total)} desfeita`
+      : `Desfeita, mas a conciliação de ${rotuloFonte(r.fonte)} ficou com ${brl(c.dif)} de diferença — confira`);
+  }, 'Desfazer apropriação antiga');
+}
+
 /* As últimas apropriações, para desfazer sem caçar no razão. */
 function apHistorico() {
-  const l = (DB.apropriacoes || []).slice().sort((a, b) => (b.quando || '').localeCompare(a.quando || ''));
+  const novas = (DB.apropriacoes || []).map(x => ({
+    data: x.ate, quando: x.quando || x.ate, n: x.n, cliente: x.cliente,
+    total: x.total, acao: `desfazerApropriacao('${x.id}')`, antiga: false
+  }));
+  // as anteriores ao registro de lote aparecem do mesmo jeito, reconstruídas
+  const porData = {};
+  movs().filter(m => ehMovApropriacao(m) && !m.loteApropriacao).forEach(m => {
+    const k = m.data + '|' + m.fonte;
+    (porData[k] = porData[k] || { data: m.data, fonte: m.fonte, total: 0, id: m.id, cliente: m.cliente });
+    porData[k].total = +(porData[k].total + (m.resultado || 0)).toFixed(2);
+  });
+  const antigas = Object.values(porData).map(x => ({
+    data: x.data, quando: x.data, n: tits().filter(t => t.jurosAte === x.data && t.fonte === x.fonte).length,
+    cliente: x.cliente, total: x.total, fonte: x.fonte,
+    acao: `desfazerApropriacaoAntiga('${x.id}')`, antiga: true
+  }));
+  const l = novas.concat(antigas).sort((a, b) => (b.quando || '').localeCompare(a.quando || ''));
   if (!l.length) return '';
   return `<div class="memo show" style="margin-top:10px">
     <div class="l" style="font-weight:600"><span>Apropriações já feitas</span><span></span></div>
-    ${l.slice(0, 6).map(x => `<div class="l"><span>${fmtBR(x.ate)}
-      <i class="muted" style="font-style:normal">· ${x.n} título(s)${x.cliente ? ' · ' + esc(x.cliente) : ''}</i></span>
+    ${l.slice(0, 8).map(x => `<div class="l"><span>${fmtBR(x.data)}
+      <i class="muted" style="font-style:normal">· ${x.n} título(s)${x.cliente ? ' · ' + esc(x.cliente) : ''}${x.fonte ? ' · ' + esc(rotuloFonte(x.fonte)) : ''}</i>
+      ${x.antiga ? '<span class="chip chip-warn">antiga</span>' : ''}</span>
       <span><b class="${x.total < 0 ? 'neg' : 'pos'}">${brl(x.total)}</b>
-      <button class="btn btn-sm" style="margin-left:8px" onclick="desfazerApropriacao('${x.id}')">Desfazer</button></span></div>`).join('')}
-    ${l.length > 6 ? `<div class="conta">e mais ${l.length - 6} apropriação(ões) antes dessas.</div>` : ''}</div>`;
+      <button class="btn btn-sm" style="margin-left:8px" onclick="${x.acao}">Desfazer</button></span></div>`).join('')}
+    ${l.length > 8 ? `<div class="conta">e mais ${l.length - 8} apropriação(ões) antes dessas.</div>` : ''}
+    <div class="conta">As marcadas como <b>antigas</b> foram feitas antes de existir o registro de desfazer:
+      são reconstruídas pelo razão, então a tela mostra o que vai mudar antes de confirmar.</div></div>`;
 }
 
 /* ---------- Aportar em título ----------
