@@ -670,6 +670,8 @@ tbody tr{transition:.12s} tbody tr:hover{background:var(--panel2)}
       <div class="field"><label>Cliente / contraparte</label><input id="at_cli" list="dlClientes" oninput="prev('at_cli','at_cliPrev')"></div>
     </div>
     <div class="cprev" id="at_cliPrev"></div>
+    <div class="field"><label id="at_sacLbl">Sacado</label><input id="at_sac" list="dlSacados">
+      <div class="hint" id="at_sacHint">Quem de fato paga. Deixe vazio se for o próprio cliente.</div></div>
     <div class="field"><label>De quem é o recurso</label>
       <div class="seg sm" id="at_natureza">
         <div class="o" data-v="ANTECIPACAO" onclick="atNatureza('ANTECIPACAO')">Meu — está com o cliente</div>
@@ -692,6 +694,29 @@ tbody tr{transition:.12s} tbody tr:hover{background:var(--panel2)}
   </div>
   <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal('ovAnt')">Cancelar</button>
     <button class="btn btn-gold" onclick="salvarAnt()">Salvar antecipação</button></div>
+</div></div>
+
+<!-- ===================== Transferência entre fontes ===================== -->
+<div class="overlay" id="ovTransf"><div class="modal">
+  <div class="modal-head"><h3>Transferência entre fontes</h3><button class="modal-x" onclick="closeModal('ovTransf')">×</button></div>
+  <div class="modal-body">
+    <div class="fgrid">
+      <div class="field"><label>Sai de</label><select id="tf_de" onchange="tfCalc()"></select></div>
+      <div class="field"><label>Entra em</label><select id="tf_para" onchange="tfCalc()"></select></div>
+    </div>
+    <div class="fgrid">
+      <div class="field"><label>Data</label><input type="date" id="tf_data"></div>
+      <div class="field"><label>Valor</label><input type="number" step="0.01" min="0.01" id="tf_valor" oninput="tfCalc()"></div>
+    </div>
+    <div class="memo" id="tf_memo"></div>
+    <div class="field"><div class="hint">Cada fonte tem a conciliação dela. Por isso a transferência move o caixa
+      <b>e</b> o recurso das duas — se só o caixa fosse, a origem ficaria com saldo a menos e recurso igual,
+      e a conta pararia de fechar. No geral o efeito é zero, e nada entra como receita ou despesa.</div></div>
+    <div class="field"><label>Observação</label><textarea id="tf_obs" rows="2"></textarea></div>
+    <div class="erro" id="tf_erro"></div>
+  </div>
+  <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal('ovTransf')">Cancelar</button>
+    <button class="btn btn-gold" onclick="salvarTransf()">Transferir</button></div>
 </div></div>
 
 <!-- ===================== Recebimento / retorno ===================== -->
@@ -1800,7 +1825,9 @@ function linhaAdicionar() {
       <button class="addopt" onclick="addDoRazao('ant')"><span class="tag">recurso na rua</span>
         <b>Antecipação</b><span>Você manda dinheiro e ele volta com juros por dia corrido. Não afeta o resultado até o retorno.</span></button>
       <button class="addopt" onclick="addDoRazao('lanc')"><span class="tag">avulso</span>
-        <b>Lançamento</b><span>Tarifa, juros, honorário, aporte, transferência — qualquer entrada ou saída que não vira título.</span></button>
+        <b>Lançamento</b><span>Tarifa, juros, honorário, aporte — qualquer entrada ou saída que não vira título.</span></button>
+      <button class="addopt" onclick="addDoRazao('transf')"><span class="tag">entre fontes</span>
+        <b>Transferência</b><span>Dinheiro que sai de uma fonte e entra na outra. Lança as duas pernas de uma vez, levando o recurso junto.</span></button>
     </div></div>`;
 }
 function toggleRazaoAdd() { razaoAdd = !razaoAdd; render(); }
@@ -1814,6 +1841,7 @@ function addDoRazao(qual) {
   razaoAdd = false;
   if (qual === 'oper') { abrirOper(); setVal('op_data', dataSugerida()); }
   else if (qual === 'ant') { abrirAnt(); setVal('at_envio', dataSugerida()); atCalc(); }
+  else if (qual === 'transf') { abrirTransf(); }
   else { abrirLanc(); setVal('lc_data', dataSugerida()); }
 }
 /* Reclassificar vale para qualquer linha, porque mexe só em conta, serviço e
@@ -2783,6 +2811,10 @@ function atNatureza(v) {
   el('at_envioLbl').textContent = cap ? 'Data em que o recurso entrou' : 'Data de envio';
   el('at_valorLbl').textContent = cap ? 'Valor recebido do investidor' : 'Valor enviado';
   el('at_prevLbl').textContent = cap ? 'Data prevista de devolução' : 'Data prevista de retorno';
+  el('at_sacLbl').textContent = cap ? 'Quem intermediou' : 'Sacado';
+  el('at_sacHint').textContent = cap
+    ? 'Só para registro. Deixe vazio se o recurso veio direto do investidor.'
+    : 'Quem de fato paga. Deixe vazio se for o próprio cliente.';
   atCalc();
 }
 
@@ -2795,6 +2827,7 @@ function abrirAnt(id) {
   setVal('at_id', t ? t.id : '');
   el('at_fonte').innerHTML = opcoesFonte(t ? t.fonte : (DB.fontes[0] || {}).codigo);
   setVal('at_cli', t ? t.cliente : ''); prev('at_cli', 'at_cliPrev');
+  setVal('at_sac', t ? (t.sacado || '') : '');
   setVal('at_envio', t ? t.dataEntrada : hoje());
   setVal('at_valor', t ? t.valor : '');
   setVal('at_prev', t ? t.dataVenc : '');
@@ -2819,6 +2852,7 @@ function atCalc() {
 function salvarAnt() {
   limpaErro('at_erro');
   const fonte = val('at_fonte'), cli = val('at_cli').trim(), envio = val('at_envio');
+  const sac = val('at_sac').trim();
   const v = num(val('at_valor')), prev2 = val('at_prev'), tRaw = val('at_taxa');
   const taxa = tRaw === '' ? null : num(tRaw), obs = val('at_obs').trim();
   if (!fonte || !cli || !envio || !(v > 0)) return erro('at_erro', 'Preencha fonte, cliente, data de envio e um valor válido.');
@@ -2829,7 +2863,7 @@ function salvarAnt() {
   const id = val('at_id');
   if (id) {
     const t = DB.titulos.find(x => x.id === id);
-    Object.assign(t, { fonte, cliente: cli, dataEntrada: envio, dataVenc: prev2 || null,
+    Object.assign(t, { fonte, cliente: cli, sacado: sac, dataEntrada: envio, dataVenc: prev2 || null,
                        valor: v, obs, taxaMensal: taxa, tipo: atNat });
     // antecipação importada da planilha não tem movimentação de envio (o efeito
     // de caixa já está no saldo inicial) — só atualiza a que existir
@@ -2839,7 +2873,7 @@ function salvarAnt() {
     const numero = Math.max(0, ...DB.titulos.map(t => t.numAntecipacao || 0)) + 1;
     const tid = uid(), desc = `${numAntLabel(numero)} — ${cli}`;
     DB.titulos.push({
-      id: tid, fonte, cliente: cli, sacado: '', tipo: 'ANTECIPACAO', nf: '', emissao: 'NA',
+      id: tid, fonte, cliente: cli, sacado: sac, tipo: atNat, nf: '', emissao: 'NA',
       dataEntrada: envio, dataVenc: prev2 || null, valorBruto: null, valorLiquido: null, valor: v,
       status: 'A_VENCER', dataReceb: null, valorRecebido: null, obs, operacaoId: null,
       numAntecipacao: numero, taxaMensal: taxa, deletedAt: null
@@ -2855,7 +2889,7 @@ function salvarAnt() {
       contaId: null, servico: null, obs: '', deletedAt: null
     });
   }
-  garantirCliente(cli);
+  garantirCliente(cli); garantirSacado(sac);
   save(); closeModal('ovAnt'); render(); toast(id ? 'Antecipação atualizada' : `Antecipação de ${brl(v)} registrada`);
 }
 function excluirAnt(id) {
@@ -4000,6 +4034,12 @@ function tiTipoMudou() {
       ? { OPERACAO: 'Título de cliente a receber.', ANTECIPACAO: 'Recurso seu que está com o cliente e volta com juros.',
           JUROS: 'Juros já reconhecidos, a receber.', AJUSTE: 'Registro de acerto.' }[novoTipo] || '' : '';
   }
+  // Virar antecipação muda o que o número significa: deixa de ser um título de
+  // cliente e passa a ser recurso seu na rua, rendendo juros por dia corrido.
+  if (novoTipo === 'ANTECIPACAO' && t.tipo !== 'ANTECIPACAO')
+    hint.innerHTML = 'Passa a contar como <b>recurso na rua</b>, rendendo juros por dia corrido a partir da data da operação. ' +
+      'A conciliação não muda — sai de "a vencer" e entra em "antecipações", os dois somam igual. ' +
+      'Ganha número de antecipação ao salvar, e daí em diante abre no editor de antecipação.';
   tiCalc();
 }
 /* Mostra, antes de salvar, exatamente o que a mudança de valor vai fazer. */
@@ -4056,6 +4096,12 @@ function salvarTitulo() {
     tipo: novoTipo, emissao: val('ti_emissao'), dataEntrada: entrada, dataVenc: venc || null,
     valor: novoValor, obs: val('ti_obs').trim()
   });
+  // Antecipação e captação são identificadas por número no razão e nas telas;
+  // título que vira uma delas precisa ganhar o seu, senão aparece sem etiqueta.
+  const naRua = novoTipo === 'ANTECIPACAO' || novoTipo === 'CAPTACAO';
+  if (naRua && !t.numAntecipacao)
+    t.numAntecipacao = Math.max(0, ...DB.titulos.map(x => x.numAntecipacao || 0)) + 1;
+  if (naRua && typeof t.taxaMensal !== 'number') t.taxaMensal = taxaPadrao();
   garantirCliente(cliente); garantirSacado(sacado);
 
   if (lancaAjuste) {
@@ -4455,6 +4501,74 @@ VIEWS.captacoes = function () {
       <tbody>${corpo || `<tr><td colspan="9"><div class="empty">Nenhuma captação em aberto.
         Para registrar uma, abra o título em Antecipações, clique no ✎ e escolha o tipo <b>Captação</b>.</div></td></tr>`}</tbody></table></div></div>`;
 };
+
+/* =========================================================================
+   Transferência entre fontes
+   Cada fonte é um patrimônio próprio: a conciliação dela fecha sozinha. Então
+   mover dinheiro de uma para a outra não é só tirar do caixa daqui e pôr no
+   caixa de lá — o recurso tem que ir junto, senão a fonte de origem fica com
+   saldo menor e montante igual, e a conta para de fechar.
+
+   Por isso a transferência sempre lança as duas pernas completas:
+     origem   saída V + resultado −V   (caixa −V, recurso −V)
+     destino  entrada V + resultado +V (caixa +V, recurso +V)
+   As duas conciliações continuam fechando e o GERAL não se mexe, porque
+   −V e +V se anulam. A conta usada é patrimonial, então nada disso aparece
+   como receita ou despesa na DRE.
+   ========================================================================= */
+function abrirTransf() {
+  if (DB.fontes.filter(f => f.ativa).length < 2)
+    return toast('É preciso ter duas fontes ativas para transferir');
+  limpaErro('tf_erro');
+  const ativas = DB.fontes.filter(f => f.ativa);
+  el('tf_de').innerHTML = opcoesFonte(ativas[0].codigo);
+  el('tf_para').innerHTML = opcoesFonte(ativas[1].codigo);
+  setVal('tf_data', dataSugerida());
+  setVal('tf_valor', '');
+  setVal('tf_obs', '');
+  tfCalc(); openModal('ovTransf'); setTimeout(() => el('tf_valor').focus(), 60);
+}
+
+function tfCalc() {
+  const de = val('tf_de'), para = val('tf_para'), v = num(val('tf_valor')), box = el('tf_memo');
+  if (!(v > 0) || !de || !para || de === para) { box.classList.remove('show'); return; }
+  const cd = conc(de), cp = conc(para);
+  box.innerHTML = `
+    <div class="l"><span><b>${esc(rotuloFonte(de))}</b> — caixa</span><span>${brl(cd.saldo)} → ${brl(cd.saldo - v)}</span></div>
+    <div class="l"><span><b>${esc(rotuloFonte(de))}</b> — recurso</span><span class="neg">${brl(cd.montante)} → ${brl(cd.montante - v)}</span></div>
+    <div class="l"><span><b>${esc(rotuloFonte(para))}</b> — caixa</span><span>${brl(cp.saldo)} → ${brl(cp.saldo + v)}</span></div>
+    <div class="l tot"><span><b>${esc(rotuloFonte(para))}</b> — recurso</span><span class="pos">${brl(cp.montante)} → ${brl(cp.montante + v)}</span></div>
+    <div class="conta">O geral não muda: sai ${brl(v)} de um lado e entra ${brl(v)} do outro.
+      As duas conciliações continuam fechando, e nada entra como receita ou despesa.</div>`;
+  box.classList.add('show');
+}
+
+function salvarTransf() {
+  limpaErro('tf_erro');
+  const de = val('tf_de'), para = val('tf_para'), data = val('tf_data');
+  const v = num(val('tf_valor')), obs = val('tf_obs').trim();
+  if (!de || !para) return erro('tf_erro', 'Escolha as duas fontes.');
+  if (de === para) return erro('tf_erro', 'A fonte de origem e a de destino precisam ser diferentes.');
+  if (!data) return erro('tf_erro', 'Informe a data.');
+  if (!(v > 0)) return erro('tf_erro', 'Informe um valor maior que zero.');
+  if (mesFechado(mesDe(data)))
+    return erro('tf_erro', `${mesLabel(mesDe(data))} está fechado. Reabra em Fechamento ou escolha outra data.`);
+
+  const conta = contaPorChave('patrimonial_transferencia');
+  const texto = `Transferência ${rotuloFonte(de)} → ${rotuloFonte(para)}`;
+  const perna = (fonte, entrada, saida, resultado) => ({
+    id: uid(), seq: proximaSeq(), fonte, data, tipo: 'TRANSFERENCIA',
+    descricao: texto, cliente: '', tituloId: null, operacaoId: null,
+    entrada, saida, resultado,
+    contaId: conta ? conta.id : null, servico: null,
+    obs: obs || 'Transferência entre fontes', deletedAt: null
+  });
+  DB.movs.push(perna(de, null, v, -v));
+  DB.movs.push(perna(para, v, null, v));
+
+  save(); closeModal('ovTransf'); render();
+  toast(`${brl(v)} transferido de ${rotuloFonte(de)} para ${rotuloFonte(para)}`);
+}
 
 /* =========================================================================
    Backup e gravação do arquivo
