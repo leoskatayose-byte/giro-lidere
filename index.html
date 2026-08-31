@@ -1035,6 +1035,7 @@ tr.apoff .inl{opacity:.7}
       <div class="hint" id="ap_hint"></div></div>
     <div id="ap_contas"></div>
     <div class="memo" id="ap_efeito"></div>
+    <div id="ap_hist"></div>
     <div class="erro" id="ap_erro"></div>
   </div>
   <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal('ovApropriar')">Cancelar</button>
@@ -1077,7 +1078,7 @@ tr.apoff .inl{opacity:.7}
 <datalist id="dlSacados"></datalist>
 <div class="toast" id="toast"></div>
 
-<script type="application/json" id="seed">{"versao":2,"tema":"lidere","config":{},"fontes":[],"clientes":[],"sacados":[],"planoContas":[],"titulos":[],"movs":[],"fechados":[],"capitalGiro":{"banco":"","contratos":[],"parcelas":[]}}</script>
+<script type="application/json" id="seed">{"versao":2,"tema":"lidere","config":{},"fontes":[],"clientes":[],"sacados":[],"planoContas":[],"titulos":[],"movs":[],"fechados":[],"apropriacoes":[],"capitalGiro":{"banco":"","contratos":[],"parcelas":[]}}</script>
 <script>
 const MODO_NUVEM = true;
 /* =========================================================================
@@ -1182,6 +1183,8 @@ function migrar() {
   DB.config = DB.config || {}; if (typeof DB.config.taxaAntecipacao !== 'number') DB.config.taxaAntecipacao = 4;
   ['clientes', 'sacados', 'planoContas', 'titulos', 'movs'].forEach(k => { if (!Array.isArray(DB[k])) DB[k] = []; });
   if (!Array.isArray(DB.fechados)) DB.fechados = [];
+  // cada apropriação guarda como estava antes, para poder ser desfeita inteira
+  if (!Array.isArray(DB.apropriacoes)) DB.apropriacoes = [];
   // Arquivo/base de antes da sequência: o array já está na ordem da planilha,
   // então o índice reconstrói a ordem certa sem precisar adivinhar nada.
   if (DB.movs.some(m => !m.seq)) DB.movs.forEach((m, i) => { if (!m.seq) m.seq = i + 1; });
@@ -1991,6 +1994,11 @@ function addDoRazao(qual) {
    por exemplo) sem precisar apagar e refazer nada. */
 function acoesRazao(m) {
   const rc = `<button class="iconbtn" title="Reclassificar: trocar conta e serviço" onclick="abrirReclass('${m.id}')">🏷</button>`;
+  // Apropriação não se apaga como lançamento avulso: apagar deixaria o relógio
+  // de juros travado e o título criado órfão. Ela se desfaz inteira.
+  if (m.loteApropriacao && loteApropriacao(m.loteApropriacao))
+    return rc + `<button class="iconbtn" title="Desfazer esta apropriação de juros por inteiro"
+      onclick="desfazerApropriacao('${m.loteApropriacao}')">↺</button>`;
   if (!TIPOS_ESTRUTURAIS.includes(m.tipo))
     return rc + `<button class="iconbtn" title="Editar" onclick="abrirLanc('${m.id}')">✎</button>
             <button class="iconbtn del" title="Excluir" onclick="excluirLanc('${m.id}')">🗑</button>`;
@@ -4763,6 +4771,7 @@ function calcApropriar() {
       Ou os juros já foram reconhecidos até essa data, ou não há nada em aberto rendendo.</div>`;
     el('ap_rodape').innerHTML = ''; el('ap_contas').innerHTML = '';
     el('ap_efeito').classList.remove('show');
+    el('ap_hist').innerHTML = apHistorico();
     return;
   }
   el('ap_previa').innerHTML = `<div class="tbl-scroll" style="max-height:36vh;overflow-y:auto"><table>
@@ -4834,6 +4843,7 @@ function atualizaDestino() {
     <div class="conta">Nada passa pelo caixa: só o direito cresce, e o montante acompanha.
       A taxa que você ajustar aqui fica gravada no título para as próximas apropriações.</div>`;
   el('ap_efeito').classList.add('show');
+  el('ap_hist').innerHTML = apHistorico();
 }
 
 function salvarApropriar() {
@@ -4847,6 +4857,18 @@ function salvarApropriar() {
 
   const bruto = +marcadas.reduce((s, x) => s + x.efeito, 0).toFixed(2);
   const cli = apJuros.cliente;
+  // Fotografia do antes: sem ela, desfazer viraria adivinhação — não dá para
+  // saber até quando os juros já tinham sido reconhecidos antes desta rodada.
+  const lote = {
+    id: uid(), ate, cliente: cli, destino, quando: new Date().toISOString(),
+    total: bruto, n: marcadas.length,
+    antes: marcadas.map(x => ({
+      id: x.t.id, valor: x.t.valor,
+      jurosAte: x.t.jurosAte === undefined ? null : x.t.jurosAte,
+      taxa: x.t.taxaMensal === undefined ? null : x.t.taxaMensal
+    })),
+    criou: [], movs: []
+  };
   // O lançamento de resultado tem que valer exatamente o que foi aplicado nos
   // títulos, centavo a centavo — somar por fora arredondaria diferente e a
   // conciliação fecharia com um centavo de sobra.
@@ -4870,15 +4892,18 @@ function salvarApropriar() {
       const nome = cli || (nomes.size === 1 ? g.linhas[0].t.cliente : 'Vários clientes');
       const conta = contaPorChave(g.chave);
       efeito(g.fonte, g.chave, valorRec);
+      const novoId = uid();
+      lote.criou.push(novoId);
       DB.titulos.push({
-        id: uid(), fonte: g.fonte, cliente: nome, sacado: '', tipo: 'JUROS',
+        id: novoId, fonte: g.fonte, cliente: nome, sacado: '', tipo: 'JUROS',
         nf: '', emissao: 'NA', dataEntrada: ate, dataVenc: ate,
         valorBruto: null, valorLiquido: null, valor: valorRec, status: 'A_VENCER',
         dataReceb: null, valorRecebido: null,
         // a categoria fica no próprio título, não só no lançamento
         contaId: conta ? conta.id : null,
         obs: `${conta ? conta.nome : 'Juros'} — ${g.linhas.length} lançamento(s) até ${fmtBR(ate)}`,
-        operacaoId: null, numAntecipacao: null, taxaMensal: null, jurosAte: null, deletedAt: null
+        operacaoId: null, numAntecipacao: null, taxaMensal: null, jurosAte: null,
+        loteApropriacao: lote.id, deletedAt: null
       });
     });
     // Captação nunca vira título a receber: dizer que há mais a receber por
@@ -4904,18 +4929,81 @@ function salvarApropriar() {
 
   Object.values(acum).forEach(({ fonte, chave, valor }) => {
     const conta = contaPorChave(chave);
+    const movId = uid();
+    lote.movs.push(movId);
     DB.movs.push({
-      id: uid(), seq: proximaSeq(), fonte, data: ate, tipo: 'JUROS',
+      id: movId, seq: proximaSeq(), fonte, data: ate, tipo: 'JUROS',
       descricao: `${conta ? conta.nome : 'Juros'}${cli ? ' — ' + cli : ''} até ${fmtBR(ate)}`,
       cliente: cli || '', tituloId: null, operacaoId: null,
       // não passa pelo caixa: o dinheiro ainda não voltou, só o direito cresceu
       entrada: null, saida: null, resultado: valor,
       contaId: conta ? conta.id : null, servico: null,
+      loteApropriacao: lote.id,
       obs: 'Juros reconhecidos por competência', deletedAt: null
     });
   });
+  DB.apropriacoes.push(lote);
   save(); closeModal('ovApropriar'); render();
   toast(`Juros de ${brl(bruto)} apropriados até ${fmtBR(ate)} em ${Object.keys(acum).length} lançamento(s)`);
+}
+
+/* ---------- Desfazer apropriação ----------
+   Apagar o lançamento do razão não bastaria: o jurosAte de cada título ficaria
+   travado na data de corte (e o período nunca mais seria apropriado), e o
+   título de juros criado continuaria na rua sem contrapartida. Desfazer é
+   devolver os três lados ao que eram. */
+const loteApropriacao = id => (DB.apropriacoes || []).find(l => l.id === id);
+
+function loteDoMov(m) {
+  if (m.loteApropriacao) return loteApropriacao(m.loteApropriacao);
+  return null;
+}
+
+function desfazerApropriacao(loteId) {
+  const l = loteApropriacao(loteId);
+  if (!l) return toast('Essa apropriação não tem registro de como estava antes');
+  if (bloqueadoPorFechamento(l.ate)) return;
+
+  // título de juros que já foi recebido não pode simplesmente sumir
+  const recebidos = (l.criou || [])
+    .map(id => DB.titulos.find(t => t.id === id))
+    .filter(t => t && (t.status === 'PAGO' || recebidoParcial(t.id) > 0));
+  if (recebidos.length)
+    return toast(`O título de juros de ${recebidos[0].cliente} já teve recebimento. Desfaça a baixa antes.`);
+
+  confirmar(`Desfazer a apropriação de ${brl(l.total)} até ${fmtBR(l.ate)}?
+    ${l.n} título(s) voltam a render desde onde rendiam antes, o lançamento sai do resultado
+    ${(l.criou || []).length ? `e o título de juros criado é removido.` : '.'}`, () => {
+    // 1) os títulos voltam ao valor e ao relógio de juros de antes
+    (l.antes || []).forEach(a => {
+      const t = DB.titulos.find(x => x.id === a.id); if (!t) return;
+      t.valor = a.valor;
+      if (a.jurosAte === null) delete t.jurosAte; else t.jurosAte = a.jurosAte;
+      if (a.taxa === null) delete t.taxaMensal; else t.taxaMensal = a.taxa;
+    });
+    // 2) o título de juros criado desaparece — ele só existia por causa disto
+    const criados = new Set(l.criou || []);
+    DB.titulos = DB.titulos.filter(t => !criados.has(t.id));
+    // 3) e o lançamento sai do resultado
+    const movs2 = new Set(l.movs || []);
+    DB.movs = DB.movs.filter(m => !movs2.has(m.id));
+    DB.apropriacoes = DB.apropriacoes.filter(x => x.id !== l.id);
+    save(); render();
+    toast(`Apropriação de ${brl(l.total)} desfeita`);
+  }, 'Desfazer apropriação');
+}
+
+/* As últimas apropriações, para desfazer sem caçar no razão. */
+function apHistorico() {
+  const l = (DB.apropriacoes || []).slice().sort((a, b) => (b.quando || '').localeCompare(a.quando || ''));
+  if (!l.length) return '';
+  return `<div class="memo show" style="margin-top:10px">
+    <div class="l" style="font-weight:600"><span>Apropriações já feitas</span><span></span></div>
+    ${l.slice(0, 6).map(x => `<div class="l"><span>${fmtBR(x.ate)}
+      <i class="muted" style="font-style:normal">· ${x.n} título(s)${x.cliente ? ' · ' + esc(x.cliente) : ''}</i></span>
+      <span><b class="${x.total < 0 ? 'neg' : 'pos'}">${brl(x.total)}</b>
+      <button class="btn btn-sm" style="margin-left:8px" onclick="desfazerApropriacao('${x.id}')">Desfazer</button></span></div>`).join('')}
+    ${l.length > 6 ? `<div class="conta">e mais ${l.length - 6} apropriação(ões) antes dessas.</div>` : ''}</div>`;
 }
 
 /* ---------- Aportar em título ----------
