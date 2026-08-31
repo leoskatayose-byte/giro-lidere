@@ -670,12 +670,18 @@ tbody tr{transition:.12s} tbody tr:hover{background:var(--panel2)}
       <div class="field"><label>Cliente / contraparte</label><input id="at_cli" list="dlClientes" oninput="prev('at_cli','at_cliPrev')"></div>
     </div>
     <div class="cprev" id="at_cliPrev"></div>
+    <div class="field"><label>De quem é o recurso</label>
+      <div class="seg sm" id="at_natureza">
+        <div class="o" data-v="ANTECIPACAO" onclick="atNatureza('ANTECIPACAO')">Meu — está com o cliente</div>
+        <div class="o" data-v="CAPTACAO" onclick="atNatureza('CAPTACAO')">De terceiro — está comigo</div>
+      </div>
+      <div class="hint" id="at_natHint"></div></div>
     <div class="fgrid">
-      <div class="field"><label>Data de envio</label><input type="date" id="at_envio" oninput="atCalc()" onchange="atCalc()"></div>
-      <div class="field"><label>Valor enviado</label><input type="number" step="0.01" min="0.01" id="at_valor" oninput="atCalc()"></div>
+      <div class="field"><label id="at_envioLbl">Data de envio</label><input type="date" id="at_envio" oninput="atCalc()" onchange="atCalc()"></div>
+      <div class="field"><label id="at_valorLbl">Valor enviado</label><input type="number" step="0.01" min="0.01" id="at_valor" oninput="atCalc()"></div>
     </div>
     <div class="fgrid">
-      <div class="field"><label>Data prevista de retorno</label><input type="date" id="at_prev" oninput="atCalc()" onchange="atCalc()"></div>
+      <div class="field"><label id="at_prevLbl">Data prevista de retorno</label><input type="date" id="at_prev" oninput="atCalc()" onchange="atCalc()"></div>
       <div class="field"><label>Taxa ao mês (%)</label><input type="number" step="0.01" min="0" id="at_taxa" oninput="atCalc()"></div>
     </div>
     <div class="memo" id="at_memo"></div>
@@ -845,6 +851,8 @@ tbody tr{transition:.12s} tbody tr:hover{background:var(--panel2)}
       <div class="field"><label>Fonte</label><select id="ti_fonte"></select></div>
       <div class="field"><label>Situação</label><input id="ti_status" disabled></div>
     </div>
+    <div class="field"><label>O que é este registro</label><select id="ti_tipo" onchange="tiTipoMudou()"></select>
+      <div class="hint" id="ti_tipoHint"></div></div>
     <div class="field"><label>Cliente</label><input id="ti_cliente" list="dlClientes" oninput="prev('ti_cliente','ti_cliPrev')"></div>
     <div class="cprev" id="ti_cliPrev"></div>
     <div class="fgrid">
@@ -1177,11 +1185,19 @@ function montante(f, ate) {
   return movs().filter(m => m.fonte === f && (!ate || m.data <= ate))
     .reduce((s, m) => s + (m.resultado || 0), fo ? fo.montante_inicial : 0);
 }
-const somaTit = (f, tipoAntecipacao) => tits()
-  .filter(t => t.fonte === f && emAberto(t) && (t.tipo === 'ANTECIPACAO') === tipoAntecipacao)
+/* ===== Captação: recurso de terceiro =====
+   Dinheiro que está no caixa da empresa mas pertence a outra pessoa — o
+   investidor põe o recurso, a empresa opera com ele e paga juros. Não é
+   "a receber": é o contrário. Guardado com valor POSITIVO (quanto se deve) e
+   subtraído na conciliação, para a tela dizer a verdade em vez de esconder um
+   passivo com sinal negativo no meio dos ativos. */
+const ehCaptacao = t => t.tipo === 'CAPTACAO';
+const somaTit = (f, filtro) => tits()
+  .filter(t => t.fonte === f && emAberto(t) && filtro(t))
   .reduce((s, t) => s + (t.valor || 0), 0);
-const aVencerTotal = f => somaTit(f, false);
-const antecTotal = f => somaTit(f, true);
+const aVencerTotal = f => somaTit(f, t => t.tipo !== 'ANTECIPACAO' && !ehCaptacao(t));
+const antecTotal = f => somaTit(f, t => t.tipo === 'ANTECIPACAO');
+const captacaoTotal = f => somaTit(f, ehCaptacao);
 
 /* A conciliação é a prova de integridade do sistema: caixa + títulos a vencer
    + antecipações na rua tem que dar exatamente o montante. */
@@ -1189,10 +1205,12 @@ function conc(f) {
   const fs = f === 'GERAL' ? DB.fontes.filter(x => x.ativa && x.incluir_no_geral).map(x => x.codigo) : [f];
   const av = fs.reduce((s, c) => s + aVencerTotal(c), 0);
   const an = fs.reduce((s, c) => s + antecTotal(c), 0);
+  const cap = fs.reduce((s, c) => s + captacaoTotal(c), 0);   // é do investidor, não da empresa
   const sd = fs.reduce((s, c) => s + saldo(c), 0);
   const mo = fs.reduce((s, c) => s + montante(c), 0);
-  const dif = (av + an + sd) - mo;
-  return { f, aVencer: av, antec: an, saldo: sd, montante: mo, soma: av + an + sd, dif: Math.abs(dif) < 0.01 ? 0 : dif, bate: Math.abs(dif) < 0.01 };
+  const soma = av + an + sd - cap;
+  const dif = soma - mo;
+  return { f, aVencer: av, antec: an, captacao: cap, saldo: sd, montante: mo, soma, dif: Math.abs(dif) < 0.01 ? 0 : dif, bate: Math.abs(dif) < 0.01 };
 }
 const fontesGeral = () => DB.fontes.filter(f => f.ativa && f.incluir_no_geral).map(f => f.codigo);
 const fontesDoFiltro = () => fonteFiltro === 'GERAL' ? fontesGeral() : [fonteFiltro];
@@ -1378,7 +1396,10 @@ function jurosAApropriar(t, ate) {
   const desde = jurosDesde(t);
   const dias = diasEntre(desde, ate);
   const taxa = taxaDa(t);
-  return { desde, dias, taxa, juros: dias > 0 ? juros(t.valor || 0, taxa, dias) : 0 };
+  const bruto = dias > 0 ? juros(t.valor || 0, taxa, dias) : 0;
+  // Na captação o juro é custo: aumenta o que se deve e reduz o resultado.
+  // Na antecipação é o contrário. O sinal aqui é o que separa os dois mundos.
+  return { desde, dias, taxa, juros: bruto, custo: ehCaptacao(t), efeito: ehCaptacao(t) ? -bruto : bruto };
 }
 
 /* ===== Prorrogação =====
@@ -1401,6 +1422,7 @@ const IC = {
   razao: '<path d="M4 5h16M4 10h16M4 15h10M4 20h7"/>',
   titulos: '<path d="M4 4h13l3 3v13H4z"/><path d="M8 11h8M8 15h5"/>',
   antecipacoes: '<circle cx="12" cy="12" r="8"/><path d="M12 7.5v9M14.5 10c0-1.1-1.1-1.7-2.5-1.7S9.5 8.9 9.5 10s1 1.4 2.5 1.7 2.5.7 2.5 1.8-1.1 1.7-2.5 1.7-2.5-.6-2.5-1.7"/>',
+  captacoes: '<path d="M12 3v18M7 8h7.5a2.5 2.5 0 010 5H8a2.5 2.5 0 000 5h8"/>',
   recebidos: '<path d="M20 6L9 17l-5-5"/>',
   resultado: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
   contas: '<rect x="3" y="5" width="18" height="15" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
@@ -1415,7 +1437,7 @@ const svgIc = k => '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" 
 
 const NAV = [
   { g: 'Visão', its: [['painel', 'Painel']] },
-  { g: 'Operação', its: [['razao', 'Razão'], ['titulos', 'Títulos a vencer'], ['antecipacoes', 'Antecipações'], ['recebidos', 'Recebidos']] },
+  { g: 'Operação', its: [['razao', 'Razão'], ['titulos', 'Títulos a vencer'], ['antecipacoes', 'Antecipações'], ['captacoes', 'Captações'], ['recebidos', 'Recebidos']] },
   { g: 'Análise', its: [['resultado', 'Resultado'], ['projecao', 'Projeção de caixa'], ['contas', 'Contas a pagar']] },
   { g: 'Ajustes', its: [['fechamento', 'Fechamento'], ['cadastros', 'Cadastros'], ['plano', 'Plano de contas'], ...(MODO_NUVEM ? [['acesso', 'Acesso']] : []), ['lixeira', 'Excluídos']] }
 ];
@@ -1424,6 +1446,7 @@ const SECAO = {
   razao: ['Razão', 'Todo lançamento do mês, com saldo e montante correndo'],
   titulos: ['Títulos a vencer', 'O que está na rua agora — dá para receber ou prorrogar'],
   antecipacoes: ['Antecipações', 'Recurso enviado que ainda não voltou, com juros projetados'],
+  captacoes: ['Captações', 'Recurso de terceiro no seu caixa — e o custo que ele gera'],
   recebidos: ['Recebidos', 'Títulos e antecipações já baixados'],
   resultado: ['Resultado', 'Receitas e despesas por conta, com comparativo do período anterior'],
   projecao: ['Projeção de caixa', 'O que já está contratado, dia a dia, a partir do saldo de hoje'],
@@ -1437,6 +1460,7 @@ const SECAO = {
 function contador(id) {
   if (id === 'titulos') { const v = tits().filter(t => t.tipo !== 'ANTECIPACAO' && statusCalc(t) === 'VENCIDO').length; return v ? { n: v, alerta: true } : { n: tits().filter(t => t.tipo !== 'ANTECIPACAO' && emAberto(t)).length }; }
   if (id === 'antecipacoes') { const v = tits().filter(t => t.tipo === 'ANTECIPACAO' && statusCalc(t) === 'VENCIDO').length; return v ? { n: v, alerta: true } : { n: tits().filter(t => t.tipo === 'ANTECIPACAO' && emAberto(t)).length }; }
+  if (id === 'captacoes') return { n: tits().filter(t => ehCaptacao(t) && emAberto(t)).length };
   if (id === 'contas') { const a = cgParcelas().filter(cgAtrasada).length; return a ? { n: a, alerta: true } : { n: 0 }; }
   if (id === 'projecao') { const p = projecaoCaixa(90); return p.pior.saldo < 0 ? { n: 1, alerta: true } : { n: 0 }; }
   if (id === 'fechamento') return { n: mesesFechados().length };
@@ -1608,6 +1632,7 @@ VIEWS.painel = function () {
   const stats = `<div class="stats">
     <div class="stat"><div class="k">Saldo em caixa</div><div class="v">${brl(g.saldo)}</div><div class="sub">Lidere + Leo, hoje</div></div>
     <div class="stat"><div class="k">Na rua</div><div class="v goldtxt">${brl(g.aVencer + g.antec)}</div><div class="sub">títulos a vencer + antecipações</div></div>
+    ${g.captacao ? `<div class="stat"><div class="k">De terceiros</div><div class="v neg">${brl(g.captacao)}</div><div class="sub">no caixa, mas não é da empresa</div></div>` : ''}
     <div class="stat"><div class="k">Montante</div><div class="v metatxt">${brl(g.montante)}</div><div class="sub">patrimônio consolidado</div></div>
     <div class="stat"><div class="k">Vencido</div><div class="v ${totVenc ? 'neg' : 'pos'}">${brl(totVenc)}</div><div class="sub">${vencidos.length} título(s) passaram da data</div></div>
     <div class="stat"><div class="k">Devendo ao banco</div><div class="v">${brl(cg.saldo)}</div><div class="sub">${cg.nPendentes} parcelas a pagar</div></div>
@@ -1677,6 +1702,7 @@ function cardConc(c) {
     <div class="ln"><span>Títulos a vencer</span><span>${brl(c.aVencer)}</span></div>
     <div class="ln"><span>+ Antecipações em aberto</span><span>${brl(c.antec)}</span></div>
     <div class="ln"><span>+ Saldo bancário</span><span>${brl(c.saldo)}</span></div>
+    ${c.captacao ? `<div class="ln"><span>− Recurso de terceiros</span><span class="neg">${brl(-c.captacao)}</span></div>` : ''}
     <div class="ln soma"><span><b>= Soma</b></span><span>${brl(c.soma)}</span></div>
     <div class="ln"><span>Montante (patrimônio)</span><span>${brl(c.montante)}</span></div>
     <div class="ln dif"><span><b>Diferença</b></span><span class="${c.bate ? 'pos' : 'neg'}">${brl(c.dif)}</span></div></div>`;
@@ -2742,6 +2768,24 @@ function excluirOper(opId) {
 }
 
 /* ---------- Antecipação ---------- */
+/* A mesma tela serve para os dois lados: recurso meu que está com o cliente
+   (antecipação, a receber) e recurso de terceiro que está comigo (captação, a
+   devolver). O que muda é o lado da conta e o sinal dos juros — por isso a
+   escolha fica logo no alto, antes dos valores. */
+let atNat = 'ANTECIPACAO';
+function atNatureza(v) {
+  atNat = v;
+  document.querySelectorAll('#at_natureza .o').forEach(o => o.classList.toggle('sel', o.dataset.v === v));
+  const cap = v === 'CAPTACAO';
+  el('at_natHint').innerHTML = cap
+    ? 'Dinheiro do investidor no seu caixa. Entra no saldo, mas é <b>subtraído do patrimônio</b> — não é seu. Os juros viram <b>custo</b>.'
+    : 'Seu dinheiro na mão do cliente. Conta como valor <b>a receber</b>, e os juros são <b>receita</b>.';
+  el('at_envioLbl').textContent = cap ? 'Data em que o recurso entrou' : 'Data de envio';
+  el('at_valorLbl').textContent = cap ? 'Valor recebido do investidor' : 'Valor enviado';
+  el('at_prevLbl').textContent = cap ? 'Data prevista de devolução' : 'Data prevista de retorno';
+  atCalc();
+}
+
 function podeEditarAnt(id) { const t = DB.titulos.find(x => x.id === id); return !!t && t.status !== 'PAGO' && t.status !== 'CANCELADO'; }
 function abrirAnt(id) {
   if (id && !podeEditarAnt(id)) return toast('Essa antecipação já retornou e não pode mais ser editada');
@@ -2756,6 +2800,7 @@ function abrirAnt(id) {
   setVal('at_prev', t ? t.dataVenc : '');
   setVal('at_taxa', t && typeof t.taxaMensal === 'number' ? t.taxaMensal : taxaPadrao());
   setVal('at_obs', t ? t.obs : '');
+  atNatureza(t && ehCaptacao(t) ? 'CAPTACAO' : 'ANTECIPACAO');
   atCalc(); openModal('ovAnt'); setTimeout(() => el('at_cli').focus(), 60);
 }
 function atCalc() {
@@ -2784,7 +2829,8 @@ function salvarAnt() {
   const id = val('at_id');
   if (id) {
     const t = DB.titulos.find(x => x.id === id);
-    Object.assign(t, { fonte, cliente: cli, dataEntrada: envio, dataVenc: prev2 || null, valor: v, obs, taxaMensal: taxa });
+    Object.assign(t, { fonte, cliente: cli, dataEntrada: envio, dataVenc: prev2 || null,
+                       valor: v, obs, taxaMensal: taxa, tipo: atNat });
     // antecipação importada da planilha não tem movimentação de envio (o efeito
     // de caixa já está no saldo inicial) — só atualiza a que existir
     const mv = DB.movs.find(m => m.tituloId === id && m.tipo === 'ANTECIPACAO_ENVIO' && !m.deletedAt);
@@ -2798,9 +2844,14 @@ function salvarAnt() {
       status: 'A_VENCER', dataReceb: null, valorRecebido: null, obs, operacaoId: null,
       numAntecipacao: numero, taxaMensal: taxa, deletedAt: null
     });
+    // Captação é o contrário da antecipação também no caixa: o dinheiro do
+    // investidor ENTRA, em vez de sair.
+    const cap = atNat === 'CAPTACAO';
     DB.movs.push({
-      id: uid(), seq: proximaSeq(), fonte, data: envio, tipo: 'ANTECIPACAO_ENVIO', descricao: desc, cliente: cli,
-      tituloId: tid, operacaoId: null, entrada: null, saida: v, resultado: null,
+      id: uid(), seq: proximaSeq(), fonte, data: envio, tipo: 'ANTECIPACAO_ENVIO',
+      descricao: cap ? `Captação — ${cli}` : desc, cliente: cli,
+      tituloId: tid, operacaoId: null,
+      entrada: cap ? v : null, saida: cap ? null : v, resultado: null,
       contaId: null, servico: null, obs: '', deletedAt: null
     });
   }
@@ -3873,19 +3924,29 @@ VIEWS.fechamento = function () {
    com a diferença: é o que um contador faria, fica visível no razão e mantém
    saldo + títulos = montante.
    ========================================================================= */
+const TIPOS_TITULO = [
+  ['OPERACAO', 'Título a receber (NF, operação)'],
+  ['ANTECIPACAO', 'Antecipação — recurso meu, na mão do cliente'],
+  ['CAPTACAO', 'Captação — recurso de terceiro, na minha mão'],
+  ['JUROS', 'Juros a receber'],
+  ['AJUSTE', 'Ajuste']
+];
 const EMISSOES = [['EMITIDO', 'Emitido'], ['NAO_EMITIDO', 'Não emitido'], ['A_RECEBER', 'A receber'],
 ['COTA', 'Cota'], ['NA', 'Não se aplica']];
 
 function abrirTitulo(id) {
   const t = DB.titulos.find(x => x.id === id); if (!t) return;
   // Antecipação em aberto tem editor próprio, com a memória de juros.
-  if (t.tipo === 'ANTECIPACAO' && emAberto(t)) return abrirAnt(id);
+  if ((t.tipo === 'ANTECIPACAO' || ehCaptacao(t)) && emAberto(t)) return abrirAnt(id);
   limpaErro('ti_erro');
   const pago = t.status === 'PAGO';
   el('tiTit').textContent = t.tipo === 'ANTECIPACAO' ? 'Editar antecipação' : 'Editar título';
   setVal('ti_id', t.id);
   el('ti_fonte').innerHTML = opcoesFonte(t.fonte);
   el('ti_emissao').innerHTML = EMISSOES.map(([v, r]) => `<option value="${v}" ${t.emissao === v ? 'selected' : ''}>${esc(r)}</option>`).join('');
+  el('ti_tipo').innerHTML = TIPOS_TITULO.map(([v, r]) => `<option value="${v}" ${t.tipo === v ? 'selected' : ''}>${esc(r)}</option>`).join('');
+  el('ti_tipo').disabled = pago;
+  tiTipoMudou();
   setVal('ti_status', pago ? `Baixado em ${fmtBR(t.dataReceb)} por ${brl(t.valorRecebido)}` : STATUS_LABEL[statusCalc(t)]);
   setVal('ti_cliente', t.cliente); prev('ti_cliente', 'ti_cliPrev');
   setVal('ti_sacado', t.sacado); setVal('ti_nf', t.nf);
@@ -3913,11 +3974,42 @@ function abrirTitulo(id) {
   openModal('ovTitulo'); setTimeout(() => el('ti_cliente').focus(), 60);
 }
 
+/* Virar captação inverte o lado da conta: o registro deixa de ser algo a
+   receber e passa a ser algo a devolver. Se o valor estiver negativo (jeito
+   antigo de representar passivo, escondido no meio dos ativos), o editor
+   oferece trocar o sinal — e a conciliação continua fechando, porque o que
+   antes era "antecipação de −X" vira "captação de +X", subtraída. */
+function tiTipoMudou() {
+  const t = DB.titulos.find(x => x.id === val('ti_id'));
+  const novoTipo = val('ti_tipo'), hint = el('ti_tipoHint');
+  if (!t) return;
+  const vira = novoTipo === 'CAPTACAO' && t.tipo !== 'CAPTACAO';
+  const deixa = novoTipo !== 'CAPTACAO' && t.tipo === 'CAPTACAO';
+  if (novoTipo === 'CAPTACAO') {
+    hint.innerHTML = 'Recurso de terceiro: está no seu caixa, mas é de outra pessoa. ' +
+      'Sai do "na rua" e passa a ser <b>subtraído</b> na conciliação, e os juros viram <b>despesa</b> — o custo de captar.';
+    if (vira && num(val('ti_valor')) < 0) {
+      setVal('ti_valor', Math.abs(num(val('ti_valor'))).toFixed(2));
+      hint.innerHTML += '<br><b>O valor foi trocado para positivo:</b> em captação o número é o quanto se deve. ' +
+        'A conciliação não muda — o que era negativo somando vira positivo subtraindo.';
+    }
+  } else if (deixa) {
+    hint.textContent = 'Deixa de ser recurso de terceiro e volta a contar como algo a receber.';
+  } else {
+    hint.textContent = TIPOS_TITULO.find(x => x[0] === novoTipo)
+      ? { OPERACAO: 'Título de cliente a receber.', ANTECIPACAO: 'Recurso seu que está com o cliente e volta com juros.',
+          JUROS: 'Juros já reconhecidos, a receber.', AJUSTE: 'Registro de acerto.' }[novoTipo] || '' : '';
+  }
+  tiCalc();
+}
 /* Mostra, antes de salvar, exatamente o que a mudança de valor vai fazer. */
 function tiCalc() {
   const t = DB.titulos.find(x => x.id === val('ti_id')), box = el('ti_memo'), wrap = el('ti_ajusteWrap');
   if (!t) return;
-  const novo = num(val('ti_valor')), dif = +(novo - t.valor).toFixed(2);
+  const novo = num(val('ti_valor'));
+  const trocaLado = (val('ti_tipo') === 'CAPTACAO') !== ehCaptacao(t)
+    && Math.abs(Math.abs(novo) - Math.abs(t.valor)) < .005;
+  const dif = trocaLado ? 0 : +(novo - t.valor).toFixed(2);
   if (t.status === 'PAGO' || !isFinite(novo) || Math.abs(dif) < .005) {
     box.classList.remove('show'); wrap.style.display = 'none'; return;
   }
@@ -3948,14 +4040,20 @@ function salvarTitulo() {
   if (!pago && !(novoValor > 0)) return erro('ti_erro', 'Informe um valor de face válido.');
   if (venc && entrada && venc < entrada) return erro('ti_erro', 'O vencimento não pode ser antes da data da operação.');
 
-  const dif = +(novoValor - t.valor).toFixed(2);
+  const novoTipo = pago ? t.tipo : val('ti_tipo');
+  // Trocar de antecipação negativa para captação positiva é a mesma dívida
+  // escrita do jeito certo: o efeito na conciliação é zero, então não há
+  // ajuste a lançar. Só a mudança de valor de verdade pede contrapartida.
+  const trocaDeLado = (novoTipo === 'CAPTACAO') !== ehCaptacao(t)
+    && Math.abs(Math.abs(novoValor) - Math.abs(t.valor)) < .005;
+  const dif = trocaDeLado ? 0 : +(novoValor - t.valor).toFixed(2);
   const lancaAjuste = !pago && Math.abs(dif) >= .005 && el('ti_ajuste').checked;
   if (lancaAjuste && mesFechado(mesDe(hoje())))
     return erro('ti_erro', `${mesLabel(mesDe(hoje()))} está fechado, e o ajuste precisa de uma data aberta. Reabra o mês em Fechamento.`);
 
   Object.assign(t, {
     fonte: val('ti_fonte'), cliente, sacado, nf: val('ti_nf').trim(),
-    emissao: val('ti_emissao'), dataEntrada: entrada, dataVenc: venc || null,
+    tipo: novoTipo, emissao: val('ti_emissao'), dataEntrada: entrada, dataVenc: venc || null,
     valor: novoValor, obs: val('ti_obs').trim()
   });
   garantirCliente(cliente); garantirSacado(sacado);
@@ -4093,7 +4191,7 @@ function abrirApropriar(cliente) {
   const ate = hoje();
   setVal('ap_ate', ate);
   el('ap_cliente').innerHTML = `<option value="">Todos os clientes</option>` +
-    [...new Set(tits().filter(t => t.tipo === 'ANTECIPACAO' && emAberto(t)).map(t => t.cliente))]
+    [...new Set(tits().filter(t => (t.tipo === 'ANTECIPACAO' || ehCaptacao(t)) && emAberto(t)).map(t => t.cliente))]
       .sort((a, b) => a.localeCompare(b, 'pt-BR'))
       .map(c => `<option value="${esc(c)}" ${c === cliente ? 'selected' : ''}>${esc(c)}</option>`).join('');
   setVal('ap_destino', 'SEPARADO');
@@ -4105,12 +4203,12 @@ function calcApropriar() {
   const ate = val('ap_ate'), cli = val('ap_cliente');
   apJuros.ate = ate; apJuros.cliente = cli;
   apJuros.linhas = tits()
-    .filter(t => t.tipo === 'ANTECIPACAO' && emAberto(t) && (!cli || t.cliente === cli))
+    .filter(t => (t.tipo === 'ANTECIPACAO' || ehCaptacao(t)) && emAberto(t) && (!cli || t.cliente === cli))
     .map(t => ({ t, ...jurosAApropriar(t, ate) }))
-    .filter(x => x.dias > 0 && Math.abs(x.juros) > .005)
+    .filter(x => x.dias > 0 && Math.abs(x.efeito) > .005)
     .sort((a, b) => (a.t.dataEntrada || '').localeCompare(b.t.dataEntrada || ''));
 
-  const total = apJuros.linhas.reduce((s, x) => s + x.juros, 0);
+  const total = apJuros.linhas.reduce((s, x) => s + x.efeito, 0);
   const naRua = apJuros.linhas.reduce((s, x) => s + (x.t.valor || 0), 0);
   if (!apJuros.linhas.length) {
     el('ap_previa').innerHTML = `<div class="empty">Nada a apropriar até ${fmtBR(ate)}${cli ? ' para ' + esc(cli) : ''}.
@@ -4119,7 +4217,7 @@ function calcApropriar() {
   }
   el('ap_previa').innerHTML = `<div class="tbl-scroll" style="max-height:38vh;overflow-y:auto"><table>
     <thead><tr><th>Cliente</th><th>Enviada</th><th>Juros desde</th><th class="num">Dias</th>
-      <th class="num">Valor</th><th class="num">Taxa</th><th class="num">Juros</th></tr></thead>
+      <th class="num">Valor</th><th class="num">Taxa</th><th>Natureza</th><th class="num">Juros</th></tr></thead>
     <tbody>${apJuros.linhas.map(x => `<tr>
       <td>${cliTag(x.t.cliente)}</td>
       <td>${fmtBR(x.t.dataEntrada)}</td>
@@ -4127,7 +4225,8 @@ function calcApropriar() {
       <td class="num">${x.dias}</td>
       <td class="num ${x.t.valor < 0 ? 'neg' : ''}">${brl(x.t.valor)}</td>
       <td class="num muted">${fmtTaxa(x.taxa)}%</td>
-      <td class="num ${x.juros < 0 ? 'neg' : 'pos'}">${brl(x.juros)}</td></tr>`).join('')}
+      <td>${x.custo ? '<span class="chip chip-bad">custo</span>' : '<span class="chip chip-ok">receita</span>'}</td>
+      <td class="num ${x.efeito < 0 ? 'neg' : 'pos'}">${brl(x.efeito)}</td></tr>`).join('')}
     </tbody></table></div>`;
   el('ap_rodape').innerHTML = `<div class="somatit ${total < 0 ? 'erro' : 'ok'}">
     ${apJuros.linhas.length} antecipação(ões) · ${brl(naRua)} na rua ·
@@ -4135,7 +4234,7 @@ function calcApropriar() {
   atualizaDestino();
 }
 function atualizaDestino() {
-  const total = apJuros.linhas.reduce((s, x) => s + x.juros, 0);
+  const total = apJuros.linhas.reduce((s, x) => s + x.efeito, 0);
   const destino = val('ap_destino');
   const conta = contaPorChave(total >= 0 ? 'receita_juros' : 'despesa_juros');
   el('ap_hint').innerHTML = destino === 'SEPARADO'
@@ -4157,31 +4256,49 @@ function salvarApropriar() {
   if (mesFechado(mesDe(ate)))
     return erro('ap_erro', `${mesLabel(mesDe(ate))} está fechado. Reabra em Fechamento ou escolha outra data de corte.`);
 
-  const total = +apJuros.linhas.reduce((s, x) => s + x.juros, 0).toFixed(2);
-  const conta = contaPorChave(total >= 0 ? 'receita_juros' : 'despesa_juros');
+  const bruto = +apJuros.linhas.reduce((s, x) => s + x.efeito, 0).toFixed(2);
+  const conta = contaPorChave(bruto >= 0 ? 'receita_juros' : 'despesa_juros');
   const cli = apJuros.cliente;
+  // O lançamento de resultado tem que valer exatamente o que foi aplicado nos
+  // títulos, centavo a centavo — somar por fora arredondaria diferente e a
+  // conciliação fecharia com um centavo de sobra.
   const porFonte = {};
-  apJuros.linhas.forEach(x => { porFonte[x.t.fonte] = +( (porFonte[x.t.fonte] || 0) + x.juros ).toFixed(2); });
+  const efeito = (fonte, v) => { porFonte[fonte] = +((porFonte[fonte] || 0) + v).toFixed(2); };
 
   if (destino === 'SEPARADO') {
     // Um título de juros por fonte — misturar fontes num título só faria a
     // conciliação de cada uma parar de fechar separadamente.
-    Object.entries(porFonte).forEach(([fonte, valor]) => {
-      const doGrupo = apJuros.linhas.filter(x => x.t.fonte === fonte);
+    const fontes = [...new Set(apJuros.linhas.map(x => x.t.fonte))];
+    fontes.forEach(fonte => {
+      const doGrupo = apJuros.linhas.filter(x => x.t.fonte === fonte && !x.custo);
+      if (!doGrupo.length) return;
+      const valorRec = +doGrupo.reduce((s, x) => s + x.efeito, 0).toFixed(2);
       const nome = cli || (new Set(doGrupo.map(x => x.t.cliente)).size === 1 ? doGrupo[0].t.cliente : 'Vários clientes');
+      efeito(fonte, valorRec);
       DB.titulos.push({
         id: uid(), fonte, cliente: cli || nome, sacado: '', tipo: 'JUROS',
         nf: '', emissao: 'NA', dataEntrada: ate, dataVenc: ate,
-        valorBruto: null, valorLiquido: null, valor: valor, status: 'A_VENCER',
+        valorBruto: null, valorLiquido: null, valor: valorRec, status: 'A_VENCER',
         dataReceb: null, valorRecebido: null,
         obs: `Juros apropriados de ${doGrupo.length} antecipação(ões) até ${fmtBR(ate)}`,
         operacaoId: null, numAntecipacao: null, taxaMensal: null, jurosAte: null, deletedAt: null
       });
     });
+    // Captação nunca vira título a receber: dizer que há mais a receber por
+    // causa de um custo seria mentir. O juro devido engorda a própria dívida.
+    apJuros.linhas.filter(x => x.custo).forEach(x => {
+      const antes = x.t.valor;
+      x.t.valor = +(antes + x.juros).toFixed(2);
+      efeito(x.t.fonte, -(x.t.valor - antes));
+    });
   } else {
-    apJuros.linhas.forEach(x => { x.t.valor = +(x.t.valor + x.juros).toFixed(2); });
+    apJuros.linhas.forEach(x => {
+      const antes = x.t.valor;
+      x.t.valor = +(antes + x.juros).toFixed(2);
+      const aplicado = +(x.t.valor - antes).toFixed(2);
+      efeito(x.t.fonte, x.custo ? -aplicado : aplicado);
+    });
   }
-  // marca até onde já foi reconhecido — é o que impede contar o mesmo período duas vezes
   apJuros.linhas.forEach(x => { x.t.jurosAte = ate; });
 
   Object.entries(porFonte).forEach(([fonte, valor]) => {
@@ -4196,7 +4313,7 @@ function salvarApropriar() {
     });
   });
   save(); closeModal('ovApropriar'); render();
-  toast(`Juros de ${brl(total)} apropriados até ${fmtBR(ate)}`);
+  toast(`Juros de ${brl(bruto)} apropriados até ${fmtBR(ate)}`);
 }
 
 /* ---------- Aportar em título ----------
@@ -4277,6 +4394,67 @@ function salvarAporte() {
   save(); closeModal('ovAporte'); render();
   toast(`Aporte de ${brl(v)} — título agora vale ${brl(t.valor)}`);
 }
+
+/* =========================================================================
+   Captações — recurso de terceiro
+   O espelho da antecipação: em vez de dinheiro meu na mão do cliente, é
+   dinheiro do investidor na minha mão. Ele entra no caixa, então aparece no
+   saldo — mas é subtraído do patrimônio, porque não é da empresa. E os juros,
+   em vez de receita, são o custo de captar.
+   ========================================================================= */
+VIEWS.captacoes = function () {
+  const fs = fontesDoFiltro();
+  const lista = tits().filter(t => ehCaptacao(t) && emAberto(t) && fs.includes(t.fonte))
+    .map(t => { const p = jurosAApropriar(t, hoje()); return { ...t, jur: p.juros, dias: p.dias, desde: p.desde }; })
+    .sort((a, b) => (a.dataEntrada || '').localeCompare(b.dataEntrada || ''));
+  const total = lista.reduce((s, t) => s + (t.valor || 0), 0);
+  const pend = lista.reduce((s, t) => s + (t.dias > 0 ? t.jur : 0), 0);
+  const custoMes = lista.reduce((s, t) => s + (t.valor || 0) * taxaDa(t) / 100, 0);
+  const c = conc(fonteFiltro);
+
+  const stats = `<div class="stats">
+    <div class="stat"><div class="k">Captado</div><div class="v">${brl(total)}</div>
+      <div class="sub">${lista.length} investidor(es) — está no caixa, mas é deles</div></div>
+    <div class="stat"><div class="k">Custo por mês</div><div class="v neg">${brl(custoMes)}</div>
+      <div class="sub">juros que essa captação gera</div></div>
+    <div class="stat"><div class="k">Juros a reconhecer</div><div class="v ${Math.abs(pend) > .5 ? 'warntxt' : 'pos'}">${brl(pend)}</div>
+      <div class="sub">já devidos e ainda fora do resultado</div></div>
+    <div class="stat"><div class="k">Caixa próprio</div><div class="v">${brl(c.saldo - total)}</div>
+      <div class="sub">saldo menos o que é de terceiro</div></div>
+  </div>`;
+
+  const aviso = Math.abs(pend) > .5
+    ? `<div class="alert"><b>${brl(pend)} de juros já devidos e ainda não reconhecidos.</b>
+       O custo do dinheiro captado corre todo dia, mas o resultado só enxerga quando é apropriado.
+       <button class="btn btn-sm right" onclick="abrirApropriar()">Apropriar juros</button></div>`
+    : `<div class="alert">Recurso de terceiro no seu caixa: entra como dinheiro disponível, mas é
+       <b>subtraído do patrimônio</b> na conciliação — porque não é seu. Os juros são o custo de captar.</div>`;
+
+  const geral = fonteFiltro === 'GERAL';
+  const corpo = lista.map(t => `<tr>
+      ${geral ? `<td>${fonteTag(t.fonte)}</td>` : ''}
+      <td>${cliTag(t.cliente)}</td>
+      <td>${fmtBR(t.dataEntrada)}</td>
+      <td class="num">${brl(t.valor)}</td>
+      <td class="num muted">${fmtTaxa(taxaDa(t))}%</td>
+      <td class="num">${brl((t.valor || 0) * taxaDa(t) / 100)}</td>
+      <td>${fmtBR(t.desde)}${t.jurosAte ? ' <span class="chip chip-ok">apropriado</span>' : ''}</td>
+      <td class="num ${Math.abs(t.jur) > .005 ? 'neg' : 'muted'}">${t.dias > 0 ? brl(t.jur) : '—'}</td>
+      <td><div class="acoes">
+        <button class="iconbtn" title="Editar" onclick="abrirTitulo('${t.id}')">✎</button>
+        <button class="btn btn-sm" title="Devolver o recurso ao investidor" onclick="abrirReceb('${t.id}')">Devolver</button></div></td></tr>`).join('');
+
+  return stats + aviso +
+    `<div class="filters">${segFonte()}
+      <button class="btn btn-sm right" onclick="abrirApropriar()">⧗ Apropriar juros</button></div>
+    <div class="panel"><div class="panel-head"><h2>Recurso de terceiros<small>o custo corre por dia, pela mesma fórmula das antecipações</small></h2></div>
+      <div class="tbl-scroll"><table><thead><tr>
+        ${geral ? '<th>Fonte</th>' : ''}<th>Investidor</th><th>Desde</th><th class="num">Valor</th>
+        <th class="num">Taxa</th><th class="num">Custo/mês</th><th>Juros desde</th>
+        <th class="num">A reconhecer</th><th></th></tr></thead>
+      <tbody>${corpo || `<tr><td colspan="9"><div class="empty">Nenhuma captação em aberto.
+        Para registrar uma, abra o título em Antecipações, clique no ✎ e escolha o tipo <b>Captação</b>.</div></td></tr>`}</tbody></table></div></div>`;
+};
 
 /* =========================================================================
    Backup e gravação do arquivo
