@@ -346,22 +346,47 @@ tbody tr{transition:.12s} tbody tr:hover{background:var(--panel2)}
 .streak .v{font-size:17px;font-weight:700;margin-top:5px;font-variant-numeric:tabular-nums}
 
 /* ---------- Calendário ---------- */
+.agenda{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:14px;align-items:start}
+@media(max-width:1000px){.agenda{grid-template-columns:1fr}}
+.agnav{display:flex;align-items:center;gap:6px}
+.agnav b{font-size:12.5px;min-width:104px;text-align:center;text-transform:capitalize}
+
 .cal{display:grid;grid-template-columns:repeat(7,1fr);gap:1px;background:var(--line);border:1px solid var(--line);
   border-radius:10px;overflow:hidden}
 .cal .hd{font-size:9px;text-transform:uppercase;letter-spacing:1.2px;color:var(--mut);text-align:center;font-weight:800;
-  padding:9px 0;background:var(--panel2)}
-.cal .d{min-height:86px;background:var(--panel);padding:7px;position:relative;overflow:hidden}
+  padding:7px 0;background:var(--panel2)}
+.cal .d{min-height:54px;background:var(--panel);padding:5px 6px;position:relative;overflow:hidden}
+.cal .d.tem{cursor:pointer}
+.cal .d.tem:hover{background:var(--raise)}
 .cal .d.out{opacity:.28}
 .cal .d.hoje{background:var(--panel2);box-shadow:inset 0 2px 0 var(--acc)}
+.cal .d.sel{background:var(--raise);box-shadow:inset 0 0 0 1px var(--acc)}
 .cal .d .n{font-weight:700;color:var(--dim);font-size:11px;font-variant-numeric:tabular-nums}
 .cal .d.hoje .n{color:var(--acc)}
-.cal .ev{display:block;margin-top:4px;padding:2px 5px;border-radius:3px;font-size:9.5px;overflow:hidden;
-  text-overflow:ellipsis;white-space:nowrap;line-height:1.6;border-left:2px solid transparent;background:var(--raise)}
-.cal .ev.t{color:var(--txt);border-left-color:var(--acc)}
-.cal .ev.t.late{border-left-color:var(--neg);color:var(--neg)}
-.cal .ev.a{color:var(--meta);border-left-color:var(--meta)}
-.cal .ev.p{color:var(--warn);border-left-color:var(--warn)}
-.cal .mais{font-size:9px;color:var(--mut);margin-top:3px}
+/* o ponto carrega a cor do cliente; o nome fica na lista ao lado, onde cabe */
+.cal .pts{display:flex;flex-wrap:wrap;gap:3px;margin-top:4px;min-height:9px}
+.cal .pt{width:7px;height:7px;border-radius:50%;display:inline-block;flex:0 0 7px}
+.cal .pt.late{box-shadow:0 0 0 1.5px var(--neg)}
+.cal .mais{font-size:8.5px;color:var(--mut);font-style:normal;line-height:7px}
+.cal .tot{position:absolute;right:6px;bottom:4px;font-size:9px;color:var(--mut);font-variant-numeric:tabular-nums}
+.agpe{font-size:11.5px;color:var(--mut);margin-top:8px;text-align:center}
+.agpe b{color:var(--dim)}
+
+.agdia{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel)}
+.agdia-h{display:flex;justify-content:space-between;gap:10px;padding:9px 11px;background:var(--panel2);
+  border-bottom:1px solid var(--line)}
+.agdia-h b{display:block;font-size:12.5px;color:var(--txt)}
+.agdia-h span{display:block;font-size:10px;color:var(--mut);margin-top:1px}
+.agdia-l{max-height:330px;overflow:auto}
+.agit{display:flex;align-items:center;gap:8px;padding:8px 11px;border-bottom:1px solid var(--line-f);cursor:pointer}
+.agit:last-child{border-bottom:0}
+.agit:hover{background:var(--raise)}
+.agit-t{min-width:0;flex:1}
+.agit-t b{display:block;font-size:12px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agit-t span{display:block;font-size:10px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agit-v{font-size:12px;font-weight:600;text-align:right;white-space:nowrap}
+.agit-v .chip{display:block;margin-top:2px}
+.agit.late .agit-v{color:var(--neg)}
 
 /* ---------- Filtros, formulários, modais ---------- */
 .filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
@@ -2007,30 +2032,6 @@ VIEWS.titulos = function () {
          <th>Status</th><th></th></tr></thead>
        <tbody>${corpo || `<tr><td colspan="9"><div class="empty">Nenhum título em aberto.</div></td></tr>`}</tbody></table></div></div>`;
 };
-
-/* Calendário do mês corrente: vencimento de título, retorno previsto de
-   antecipação e parcela do banco na mesma grade — é a visão de caixa. */
-function calendarioVencimentos() {
-  const hj = hoje(), mk = mesDe(hj), [y, m] = mk.split('-').map(Number);
-  const primeiro = new Date(y, m - 1, 1), inicio = new Date(y, m - 1, 1 - primeiro.getDay());
-  const ev = {};
-  const push = (d, html) => { if (!d) return; (ev[d] = ev[d] || []).push(html); };
-  tits().filter(t => emAberto(t)).forEach(t => {
-    const late = t.dataVenc && t.dataVenc < hj;
-    if (t.tipo === 'ANTECIPACAO') push(t.dataVenc, `<span class="ev a" title="${esc(t.cliente)} · ${brl(t.valor)}">${esc(t.cliente)} ${curto(t.valor)}</span>`);
-    else push(t.dataVenc, `<span class="ev t ${late ? 'late' : ''}" title="${esc(t.sacado || t.cliente)} · ${brl(t.valor)}">${esc(t.sacado || t.cliente)} ${curto(t.valor)}</span>`);
-  });
-  cgParcelas().filter(p => !p.pago).forEach(p => push(p.vencimento, `<span class="ev p" title="${esc(p.contrato)} · ${brl(p.valor)}">Banco ${curto(p.valor)}</span>`));
-  let cels = '';
-  for (let i = 0; i < 42; i++) {
-    const d = new Date(inicio.getTime()); d.setDate(inicio.getDate() + i);
-    const dk = iso(d), fora = d.getMonth() !== m - 1, lista = ev[dk] || [];
-    cels += `<div class="d ${fora ? 'out' : ''} ${dk === hj ? 'hoje' : ''}"><div class="n">${d.getDate()}</div>${lista.slice(0, 3).join('')}${lista.length > 3 ? `<div class="mais">+${lista.length - 3}</div>` : ''}</div>`;
-  }
-  return `<div class="panel"><div class="panel-head"><h2>Agenda de ${esc(mesLabel(mk))}<small>vencimento de título, retorno previsto de antecipação e parcela do banco</small></h2>
-    <div class="gleg" style="margin:0">${leg('var(--acc)', 'Título')}${leg('var(--meta)', 'Antecipação')}${leg('var(--warn)', 'Parcela do banco')}</div></div>
-    <div class="cal">${['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map(d => `<div class="hd">${d}</div>`).join('')}${cels}</div></div>`;
-}
 
 /* ---------- Antecipações ---------- */
 VIEWS.antecipacoes = function () {
@@ -5061,6 +5062,136 @@ function cardsCaixa() {
       <div class="v">${brl(linhas.reduce((s, x) => s + x.disp, 0))}</div>
       <div class="sub">as duas juntas, mas quem paga é uma delas</div></div>
   </div>${aviso}`;
+}
+
+/* =========================================================================
+   Agenda de vencimentos
+   O calendário responde "que dias apertam", não "quem paga o quê" — nome de
+   cliente espremido em 9px numa célula de 86px não se lê. Então a grade
+   carrega só pontos na cor do cliente, e a lista do dia fica ao lado, com
+   espaço para cliente, sacado, número e valor de verdade.
+   ========================================================================= */
+let agMes = null;      // null = mês corrente; muda com as setas
+let agDia = null;      // dia selecionado; null = o primeiro dia com evento
+
+const agMesAtual = () => agMes || mesDe(hoje());
+
+function agIr(delta) {
+  const [y, m] = agMesAtual().split('-').map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  agMes = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  agDia = null;
+  render();
+}
+function agHoje() { agMes = null; agDia = hoje(); render(); }
+/* Clicar num dia da borda (que é do mês vizinho) leva o calendário junto —
+   senão a seleção some e a lista volta para outro dia sem explicação. */
+function agSelec(dk) {
+  agDia = dk;
+  if (mesDe(dk) !== agMesAtual()) agMes = mesDe(dk);
+  render();
+}
+
+/* Um evento por vencimento, com o que a lista do lado precisa mostrar. */
+function agEventos() {
+  const fs = fontesDoFiltro(), hj = hoje(), ev = {};
+  const push = e => { if (!e.data) return; (ev[e.data] = ev[e.data] || []).push(e); };
+  tits().filter(t => emAberto(t) && fs.includes(t.fonte)).forEach(t => {
+    const cap = ehCaptacao(t), ant = t.tipo === 'ANTECIPACAO';
+    push({
+      data: t.dataVenc, id: t.id, tipo: cap ? 'captacao' : ant ? 'antecipacao' : 'titulo',
+      cliente: t.cliente, sacado: t.sacado || '', valor: t.valor || 0,
+      num: ant || cap ? numAntLabel(t.numAntecipacao) : (t.nf ? 'NF ' + t.nf : ''),
+      cor: corCliente(t.cliente), atrasado: !!(t.dataVenc && t.dataVenc < hj), fonte: t.fonte
+    });
+  });
+  cgParcelas().filter(p => !p.pago).forEach(p => push({
+    data: p.vencimento, id: p.id, tipo: 'banco', cliente: p.credor || 'Banco',
+    sacado: p.contrato || '', valor: p.valor || 0,
+    num: `Parcela ${p.num}/${p.total}`, cor: 'var(--warn)',
+    atrasado: p.vencimento < hj, fonte: null
+  }));
+  return ev;
+}
+
+const AG_ROTULO = { titulo: 'Título', antecipacao: 'Antecipação', captacao: 'Captação', banco: 'Parcela do banco' };
+
+function calendarioVencimentos() {
+  const hj = hoje(), mk = agMesAtual(), [y, m] = mk.split('-').map(Number);
+  const primeiro = new Date(y, m - 1, 1), inicio = new Date(y, m - 1, 1 - primeiro.getDay());
+  const ev = agEventos();
+
+  // 6 linhas só quando o mês precisa — mês que cabe em 5 não ganha uma vazia
+  const ultimo = new Date(y, m, 0).getDate();
+  const semanas = Math.ceil((primeiro.getDay() + ultimo) / 7);
+
+  const doMes = Object.keys(ev).filter(d => d.startsWith(mk)).sort();
+  // sem escolha: hoje, senão o próximo vencimento, senão o último que passou
+  const sel = (agDia && agDia.startsWith(mk) && ev[agDia]) ? agDia
+    : (mk === mesDe(hj) && ev[hj]) ? hj
+      : (doMes.find(d => d >= hj) || doMes[doMes.length - 1] || null);
+
+  let cels = '';
+  for (let i = 0; i < semanas * 7; i++) {
+    const d = new Date(inicio.getTime()); d.setDate(inicio.getDate() + i);
+    const dk = iso(d), fora = d.getMonth() !== m - 1, lista = ev[dk] || [];
+    const tot = lista.reduce((s, x) => s + x.valor, 0);
+    const pontos = lista.slice(0, 8).map(x =>
+      `<i class="pt ${x.atrasado ? 'late' : ''}" style="background:${x.cor}" title="${esc(x.cliente)} · ${brl(x.valor)}"></i>`).join('');
+    cels += `<div class="d ${fora ? 'out' : ''} ${dk === hj ? 'hoje' : ''} ${dk === sel ? 'sel' : ''} ${lista.length ? 'tem' : ''}"
+        ${lista.length ? `onclick="agSelec('${dk}')"` : ''}>
+      <div class="n">${d.getDate()}</div>
+      <div class="pts">${pontos}${lista.length > 8 ? `<i class="mais">+${lista.length - 8}</i>` : ''}</div>
+      ${lista.length ? `<div class="tot">${curto(tot)}</div>` : ''}</div>`;
+  }
+
+  const totalMes = doMes.reduce((s, d) => s + ev[d].reduce((a, x) => a + x.valor, 0), 0);
+  const nMes = doMes.reduce((s, d) => s + ev[d].length, 0);
+
+  return `<div class="panel"><div class="panel-head">
+      <h2>Agenda<small>vencimento de título, retorno previsto de antecipação e parcela do banco</small></h2>
+      <div class="agnav">
+        <button class="iconbtn" title="Mês anterior" onclick="agIr(-1)">‹</button>
+        <b>${esc(mesLabel(mk))}</b>
+        <button class="iconbtn" title="Próximo mês" onclick="agIr(1)">›</button>
+        ${mk === mesDe(hj) ? '' : '<button class="btn btn-sm" onclick="agHoje()">Hoje</button>'}
+      </div></div>
+    <div class="agenda">
+      <div>
+        <div class="cal">${['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map(d => `<div class="hd">${d}</div>`).join('')}${cels}</div>
+        <div class="agpe">${nMes ? `${nMes} vencimento(s) em ${esc(mesLabel(mk))}, somando <b>${brl(totalMes)}</b>` : `Nenhum vencimento em ${esc(mesLabel(mk))}`}</div>
+      </div>
+      ${agLista(sel, ev[sel] || [], hj)}
+    </div></div>`;
+}
+
+/* A lista do dia: é aqui que cabe nome de cliente, sacado, número e valor. */
+function agLista(dk, lista, hj) {
+  if (!dk) return `<div class="agdia"><div class="empty" style="margin:0">Sem vencimentos neste mês.</div></div>`;
+  const total = lista.reduce((s, x) => s + x.valor, 0);
+  const atrasados = lista.filter(x => x.atrasado).length;
+  const linhas = lista.slice().sort((a, b) => b.valor - a.valor).map(x => `
+    <div class="agit ${x.atrasado ? 'late' : ''}" ${x.tipo === 'banco' ? '' : `onclick="abrirTitulo('${x.id}')"`}
+      title="${x.tipo === 'banco' ? esc(x.sacado) : 'Abrir para editar'}">
+      <i class="cdot" style="background:${x.cor}"></i>
+      <div class="agit-t">
+        <b>${esc(x.cliente)}</b>
+        <span>${x.sacado && x.sacado !== x.cliente ? 'sacado ' + esc(x.sacado) + ' · ' : ''}${esc(AG_ROTULO[x.tipo])}${x.num ? ' · ' + esc(x.num) : ''}</span>
+      </div>
+      <div class="agit-v num">${brl(x.valor)}${x.atrasado ? '<span class="chip chip-bad">vencido</span>' : ''}</div>
+    </div>`).join('');
+  return `<div class="agdia">
+    <div class="agdia-h">
+      <div><b>${fmtBR(dk)}</b><span>${dk === hj ? 'hoje' : diaDaSemana(dk)}</span></div>
+      <div class="num"><b>${brl(total)}</b><span>${lista.length} vencimento(s)${atrasados ? ` · ${atrasados} vencido(s)` : ''}</span></div>
+    </div>
+    <div class="agdia-l">${linhas}</div></div>`;
+}
+
+const DIAS_SEMANA = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado'];
+function diaDaSemana(dk) {
+  const [y, m, d] = dk.split('-').map(Number);
+  return DIAS_SEMANA[new Date(y, m - 1, d).getDay()];
 }
 
 /* =========================================================================
