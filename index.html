@@ -898,6 +898,56 @@ tbody tr{transition:.12s} tbody tr:hover{background:var(--panel2)}
     <button class="btn btn-gold" onclick="salvarReclass()">Salvar</button></div>
 </div></div>
 
+<!-- ===================== Apropriar juros ===================== -->
+<div class="overlay" id="ovApropriar"><div class="modal wide">
+  <div class="modal-head"><h3>Apropriar juros das antecipações</h3><button class="modal-x" onclick="closeModal('ovApropriar')">×</button></div>
+  <div class="modal-body">
+    <div class="alert">Reconhece o que já foi ganho (ou devido) nas antecipações que continuam abertas,
+      sem esperar o dinheiro voltar. Cada antecipação guarda até quando os juros já foram reconhecidos,
+      então rodar de novo no mês que vem não conta o mesmo período duas vezes.</div>
+    <div class="fgrid">
+      <div class="field"><label>Cliente</label><select id="ap_cliente" onchange="calcApropriar()"></select></div>
+      <div class="field"><label>Apropriar até</label><input type="date" id="ap_ate" oninput="calcApropriar()" onchange="calcApropriar()"></div>
+    </div>
+    <div id="ap_previa"></div>
+    <div id="ap_rodape"></div>
+    <div class="field"><label>O que fazer com os juros</label>
+      <select id="ap_destino" onchange="atualizaDestino()">
+        <option value="SEPARADO">Criar um título de juros a receber, separado</option>
+        <option value="SOMAR">Somar ao valor de cada antecipação</option>
+      </select>
+      <div class="hint" id="ap_hint"></div></div>
+    <div class="memo" id="ap_efeito"></div>
+    <div class="erro" id="ap_erro"></div>
+  </div>
+  <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal('ovApropriar')">Cancelar</button>
+    <button class="btn btn-gold" onclick="salvarApropriar()">Apropriar</button></div>
+</div></div>
+
+<!-- ===================== Aportar em título ===================== -->
+<div class="overlay" id="ovAporte"><div class="modal">
+  <div class="modal-head"><h3>Aportar no título</h3><button class="modal-x" onclick="closeModal('ovAporte')">×</button></div>
+  <div class="modal-body">
+    <input type="hidden" id="ao_id">
+    <div class="prorrog-info" id="ao_info"></div>
+    <div class="alert">Para pagamento que não é despesa e sim direito — parcela de consórcio, aporte em cota.
+      O dinheiro sai do caixa e o título cresce na mesma medida, sem passar pelo resultado.</div>
+    <div class="field"><label>Converter um lançamento que já existe?</label>
+      <select id="ao_converter" onchange="aoConverterMudou()"></select>
+      <div class="hint">Use quando o pagamento já foi lançado como despesa e na verdade era aporte.</div></div>
+    <div class="fgrid">
+      <div class="field"><label>Fonte</label><select id="ao_fonte"></select></div>
+      <div class="field"><label>Data</label><input type="date" id="ao_data"></div>
+    </div>
+    <div class="field"><label>Valor do aporte</label><input type="number" step="0.01" min="0.01" id="ao_valor" oninput="aoCalc()"></div>
+    <div class="memo" id="ao_memo"></div>
+    <div class="field"><label>Observação</label><textarea id="ao_obs" rows="2"></textarea></div>
+    <div class="erro" id="ao_erro"></div>
+  </div>
+  <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal('ovAporte')">Cancelar</button>
+    <button class="btn btn-gold" onclick="salvarAporte()">Aportar</button></div>
+</div></div>
+
 <!-- ===================== Confirmação ===================== -->
 <div class="overlay" id="ovConf"><div class="modal" style="max-width:440px">
   <div class="modal-head"><h3 id="cf_tit">Confirmar</h3><button class="modal-x" onclick="closeModal('ovConf')">×</button></div>
@@ -1309,6 +1359,26 @@ function checaDoc(v) {
   if (d.length === 11) return cpfValido(d) ? { txt: 'CPF válido', ok: true } : { txt: 'CPF: dígitos não conferem', ok: false };
   if (d.length === 14) return cnpjValido(d) ? { txt: 'CNPJ válido', ok: true } : { txt: 'CNPJ: dígitos não conferem', ok: false };
   return { txt: 'faltam dígitos (11 para CPF, 14 para CNPJ)', ok: false };
+}
+
+/* ===== Apropriação de juros =====
+   Antecipação que fica meses na rua rende juros todo mês, mas o resultado só
+   enxerga isso quando o dinheiro volta. Apropriar é reconhecer o que já foi
+   ganho (ou devido) até uma data, sem esperar o retorno.
+
+   jurosAte guarda até quando aquele título já teve juros reconhecidos — é o
+   que impede apropriar duas vezes o mesmo período. Sem esse campo, apropriar
+   de novo em setembro contaria maio a agosto outra vez.
+
+   O sinal vem do próprio valor: título positivo é dinheiro na rua e os juros
+   são receita; título negativo é recurso de terceiro na mão da empresa, e os
+   juros são despesa. A fórmula é a mesma. */
+const jurosDesde = t => t.jurosAte || t.dataEntrada;
+function jurosAApropriar(t, ate) {
+  const desde = jurosDesde(t);
+  const dias = diasEntre(desde, ate);
+  const taxa = taxaDa(t);
+  return { desde, dias, taxa, juros: dias > 0 ? juros(t.valor || 0, taxa, dias) : 0 };
 }
 
 /* ===== Prorrogação =====
@@ -1796,6 +1866,7 @@ VIEWS.titulos = function () {
       <td><span class="chip ${t.st === 'VENCIDO' ? 'chip-bad' : 'chip-n'}">${STATUS_LABEL[t.st]}</span></td>
       <td><div class="acoes">
         <button class="iconbtn" title="Editar título" onclick="abrirTitulo('${t.id}')">✎</button>
+        <button class="iconbtn" title="Aportar: pagamento que aumenta o título, sem virar despesa" onclick="abrirAporte('${t.id}')">↑</button>
         ${t.operacaoId && podeEditarOper(t.operacaoId) ? `<button class="iconbtn" title="Editar a operação inteira" onclick="abrirOper('${t.operacaoId}')">⧉</button>` : ''}
         <button class="btn btn-sm" title="Dar prazo novo e cobrar os juros do período" onclick="abrirProrrog('${t.id}')">Prorrogar</button>
         <button class="btn btn-sm btn-gold" onclick="abrirReceb('${t.id}')">Receber</button></div></td></tr>`).join('');
@@ -1852,8 +1923,14 @@ VIEWS.antecipacoes = function () {
     <div class="stat"><div class="k">Sem data prevista</div><div class="v ${semData.length ? 'warntxt' : 'pos'}">${semData.length}</div><div class="sub">sem data não há como cobrar</div></div>
   </div>`;
 
-  const aviso = semData.length ? `<div class="alert"><b>${semData.length} antecipação(ões) sem data prevista de retorno.</b>
-    Sem data, o sistema não consegue projetar juros nem apontar atraso. Não precisa combinar com o cliente ainda — precisa existir uma data.</div>` : '';
+  // juros ainda não reconhecidos: o que está sendo ganho mas não aparece no resultado
+  const pend = lista.map(t => jurosAApropriar(t, hoje())).reduce((s, x) => s + (x.dias > 0 ? x.juros : 0), 0);
+  const avisoJuros = Math.abs(pend) > .5 ? `<div class="alert"><b>${brl(pend)} de juros ainda não reconhecidos.</b>
+    As antecipações rendem desde o envio, mas o resultado só enxerga isso quando o dinheiro volta.
+    Apropriar reconhece o que já foi ganho, sem esperar o retorno.
+    <button class="btn btn-sm right" onclick="abrirApropriar()">Apropriar juros</button></div>` : '';
+  const aviso = avisoJuros + (semData.length ? `<div class="alert"><b>${semData.length} antecipação(ões) sem data prevista de retorno.</b>
+    Sem data, o sistema não consegue projetar juros nem apontar atraso. Não precisa combinar com o cliente ainda — precisa existir uma data.</div>` : '');
 
   const dados = ordena(filtra(lista, busca.ant, ['cliente', 'sacado']), ordem.ant);
   const geral = fonteFiltro === 'GERAL';
@@ -1873,6 +1950,7 @@ VIEWS.antecipacoes = function () {
   return stats + aviso +
     `<div class="filters">${segFonte()}${campoBusca('ant', 'Buscar cliente, sacado...')}</div>
      <div class="panel"><div class="panel-head"><h2>Antecipações em aberto<small>juros simples, pro rata die — valor × taxa ÷ 30 × dias corridos</small></h2>
+       <button class="btn btn-sm" onclick="abrirApropriar()">⧗ Apropriar juros</button>
        <button class="btn btn-sm" onclick="abrirAnt()">+ Antecipação</button></div>
        <div class="tbl-scroll"><table><thead><tr>
          ${geral ? '<th>Fonte</th>' : ''}<th>Nº</th>${th('ant', 'cliente', 'Cliente')}${th('ant', 'sacado', 'Sacado')}
@@ -3991,6 +4069,213 @@ function salvarReclass() {
   // a promessa da tela é justamente essa: nada de dinheiro se move
   const mexeu = Math.abs(depois.saldo - antes.saldo) > .005 || Math.abs(depois.montante - antes.montante) > .005;
   toast(mexeu ? 'Reclassificado (confira a conciliação)' : `Reclassificado para "${conta.nome}"`);
+}
+
+/* =========================================================================
+   Apropriar juros e Aportar em título
+   ---------------------------------------------------------------------------
+   Duas operações que faltavam e que têm a mesma exigência: mexer no que está
+   na rua sem quebrar saldo + títulos = montante.
+
+   APROPRIAR JUROS — reconhece o que já foi ganho numa antecipação que continua
+   aberta. Títulos sobem J e o montante sobe J (o resultado). O caixa não se
+   move, e a conta fecha.
+
+   APORTAR — pagar uma parcela de consórcio, por exemplo: o dinheiro sai do
+   caixa mas não é despesa, vira cota. Saldo cai V, títulos sobem V, montante
+   fica igual. Fecha também.
+   ========================================================================= */
+
+/* ---------- Apropriar juros ---------- */
+let apJuros = { linhas: [], cliente: '', ate: '' };
+
+function abrirApropriar(cliente) {
+  const ate = hoje();
+  setVal('ap_ate', ate);
+  el('ap_cliente').innerHTML = `<option value="">Todos os clientes</option>` +
+    [...new Set(tits().filter(t => t.tipo === 'ANTECIPACAO' && emAberto(t)).map(t => t.cliente))]
+      .sort((a, b) => a.localeCompare(b, 'pt-BR'))
+      .map(c => `<option value="${esc(c)}" ${c === cliente ? 'selected' : ''}>${esc(c)}</option>`).join('');
+  setVal('ap_destino', 'SEPARADO');
+  limpaErro('ap_erro');
+  calcApropriar();
+  openModal('ovApropriar');
+}
+function calcApropriar() {
+  const ate = val('ap_ate'), cli = val('ap_cliente');
+  apJuros.ate = ate; apJuros.cliente = cli;
+  apJuros.linhas = tits()
+    .filter(t => t.tipo === 'ANTECIPACAO' && emAberto(t) && (!cli || t.cliente === cli))
+    .map(t => ({ t, ...jurosAApropriar(t, ate) }))
+    .filter(x => x.dias > 0 && Math.abs(x.juros) > .005)
+    .sort((a, b) => (a.t.dataEntrada || '').localeCompare(b.t.dataEntrada || ''));
+
+  const total = apJuros.linhas.reduce((s, x) => s + x.juros, 0);
+  const naRua = apJuros.linhas.reduce((s, x) => s + (x.t.valor || 0), 0);
+  if (!apJuros.linhas.length) {
+    el('ap_previa').innerHTML = `<div class="empty">Nada a apropriar até ${fmtBR(ate)}${cli ? ' para ' + esc(cli) : ''}.
+      Ou os juros já foram reconhecidos até essa data, ou não há antecipação em aberto.</div>`;
+    el('ap_rodape').innerHTML = ''; return;
+  }
+  el('ap_previa').innerHTML = `<div class="tbl-scroll" style="max-height:38vh;overflow-y:auto"><table>
+    <thead><tr><th>Cliente</th><th>Enviada</th><th>Juros desde</th><th class="num">Dias</th>
+      <th class="num">Valor</th><th class="num">Taxa</th><th class="num">Juros</th></tr></thead>
+    <tbody>${apJuros.linhas.map(x => `<tr>
+      <td>${cliTag(x.t.cliente)}</td>
+      <td>${fmtBR(x.t.dataEntrada)}</td>
+      <td>${fmtBR(x.desde)}${x.t.jurosAte ? ' <span class="chip chip-ok">já apropriado antes</span>' : ''}</td>
+      <td class="num">${x.dias}</td>
+      <td class="num ${x.t.valor < 0 ? 'neg' : ''}">${brl(x.t.valor)}</td>
+      <td class="num muted">${fmtTaxa(x.taxa)}%</td>
+      <td class="num ${x.juros < 0 ? 'neg' : 'pos'}">${brl(x.juros)}</td></tr>`).join('')}
+    </tbody></table></div>`;
+  el('ap_rodape').innerHTML = `<div class="somatit ${total < 0 ? 'erro' : 'ok'}">
+    ${apJuros.linhas.length} antecipação(ões) · ${brl(naRua)} na rua ·
+    juros a reconhecer: <b>${brl(total)}</b>${total < 0 ? ' (despesa — recurso de terceiro)' : ''}</div>`;
+  atualizaDestino();
+}
+function atualizaDestino() {
+  const total = apJuros.linhas.reduce((s, x) => s + x.juros, 0);
+  const destino = val('ap_destino');
+  const conta = contaPorChave(total >= 0 ? 'receita_juros' : 'despesa_juros');
+  el('ap_hint').innerHTML = destino === 'SEPARADO'
+    ? `Cria <b>um título só</b> de ${brl(total)} a receber, com vencimento em ${fmtBR(val('ap_ate'))}.
+       Como ele vence antes das antecipações, aparece primeiro na lista — e é o primeiro a ser amortizado quando o cliente mandar recurso.`
+    : `Soma os juros ao valor de <b>cada antecipação</b>. Simples, mas os juros deixam de ser cobráveis em separado.`;
+  el('ap_efeito').innerHTML = `<div class="l"><span>Na rua (títulos)</span><span class="${total < 0 ? 'neg' : 'pos'}">${brl(total)}</span></div>
+    <div class="l"><span>Montante</span><span class="${total < 0 ? 'neg' : 'pos'}">${brl(total)}</span></div>
+    <div class="l"><span>Caixa</span><span class="muted">não se move</span></div>
+    <div class="l tot"><span>Conciliação</span><span class="pos">continua fechando</span></div>
+    <div class="conta">Entra no razão como "${esc(conta ? conta.nome : 'Juros')}" em ${fmtBR(val('ap_ate'))}, sem passar pelo caixa.</div>`;
+  el('ap_efeito').classList.add('show');
+}
+function salvarApropriar() {
+  limpaErro('ap_erro');
+  const ate = val('ap_ate'), destino = val('ap_destino');
+  if (!ate) return erro('ap_erro', 'Informe a data de corte.');
+  if (!apJuros.linhas.length) return erro('ap_erro', 'Não há juros a apropriar nesse período.');
+  if (mesFechado(mesDe(ate)))
+    return erro('ap_erro', `${mesLabel(mesDe(ate))} está fechado. Reabra em Fechamento ou escolha outra data de corte.`);
+
+  const total = +apJuros.linhas.reduce((s, x) => s + x.juros, 0).toFixed(2);
+  const conta = contaPorChave(total >= 0 ? 'receita_juros' : 'despesa_juros');
+  const cli = apJuros.cliente;
+  const porFonte = {};
+  apJuros.linhas.forEach(x => { porFonte[x.t.fonte] = +( (porFonte[x.t.fonte] || 0) + x.juros ).toFixed(2); });
+
+  if (destino === 'SEPARADO') {
+    // Um título de juros por fonte — misturar fontes num título só faria a
+    // conciliação de cada uma parar de fechar separadamente.
+    Object.entries(porFonte).forEach(([fonte, valor]) => {
+      const doGrupo = apJuros.linhas.filter(x => x.t.fonte === fonte);
+      const nome = cli || (new Set(doGrupo.map(x => x.t.cliente)).size === 1 ? doGrupo[0].t.cliente : 'Vários clientes');
+      DB.titulos.push({
+        id: uid(), fonte, cliente: cli || nome, sacado: '', tipo: 'JUROS',
+        nf: '', emissao: 'NA', dataEntrada: ate, dataVenc: ate,
+        valorBruto: null, valorLiquido: null, valor: valor, status: 'A_VENCER',
+        dataReceb: null, valorRecebido: null,
+        obs: `Juros apropriados de ${doGrupo.length} antecipação(ões) até ${fmtBR(ate)}`,
+        operacaoId: null, numAntecipacao: null, taxaMensal: null, jurosAte: null, deletedAt: null
+      });
+    });
+  } else {
+    apJuros.linhas.forEach(x => { x.t.valor = +(x.t.valor + x.juros).toFixed(2); });
+  }
+  // marca até onde já foi reconhecido — é o que impede contar o mesmo período duas vezes
+  apJuros.linhas.forEach(x => { x.t.jurosAte = ate; });
+
+  Object.entries(porFonte).forEach(([fonte, valor]) => {
+    DB.movs.push({
+      id: uid(), seq: proximaSeq(), fonte, data: ate, tipo: valor >= 0 ? 'JUROS' : 'JUROS',
+      descricao: `Apropriação de juros${cli ? ' — ' + cli : ''} até ${fmtBR(ate)}`,
+      cliente: cli || '', tituloId: null, operacaoId: null,
+      // não passa pelo caixa: o dinheiro ainda não voltou, só o direito cresceu
+      entrada: null, saida: null, resultado: valor,
+      contaId: conta ? conta.id : null, servico: null,
+      obs: 'Juros reconhecidos por competência', deletedAt: null
+    });
+  });
+  save(); closeModal('ovApropriar'); render();
+  toast(`Juros de ${brl(total)} apropriados até ${fmtBR(ate)}`);
+}
+
+/* ---------- Aportar em título ----------
+   Pagamento que não é despesa: vira cota, vira direito. O caso do consórcio. */
+function abrirAporte(id) {
+  const t = DB.titulos.find(x => x.id === id); if (!t) return;
+  if (t.status === 'PAGO') return toast('Título baixado não recebe aporte');
+  limpaErro('ao_erro');
+  setVal('ao_id', t.id);
+  el('ao_info').innerHTML = `
+    <div><div class="k">Título</div><div class="v" style="font-size:12.5px">${cliTag(t.cliente)}${t.sacado ? ' · ' + esc(t.sacado) : ''}</div></div>
+    <div><div class="k">Valor hoje</div><div class="v">${brl(t.valor)}</div></div>`;
+  el('ao_fonte').innerHTML = opcoesFonte(t.fonte);
+  setVal('ao_data', hoje());
+  setVal('ao_valor', '');
+  setVal('ao_obs', '');
+  // Converter um lançamento que já existe resolve o histórico: aquele pagamento
+  // que entrou como despesa e na verdade era aporte.
+  const cand = movs().filter(m => m.saida > 0 && !m.tituloId && !m.operacaoId)
+    .sort((a, b) => b.data.localeCompare(a.data)).slice(0, 60);
+  el('ao_converter').innerHTML = `<option value="">Não — lançar uma saída nova</option>` +
+    cand.map(m => `<option value="${m.id}">${fmtBR(m.data)} · ${esc(m.descricao.slice(0, 42))} · ${brl(m.saida)}</option>`).join('');
+  aoCalc();
+  openModal('ovAporte'); setTimeout(() => el('ao_valor').focus(), 60);
+}
+function aoConverterMudou() {
+  const m = movs().find(x => x.id === val('ao_converter'));
+  if (m) { setVal('ao_valor', m.saida); setVal('ao_data', m.data); el('ao_fonte').value = m.fonte; }
+  aoCalc();
+}
+function aoCalc() {
+  const t = DB.titulos.find(x => x.id === val('ao_id')), box = el('ao_memo');
+  const v = num(val('ao_valor')), conv = !!val('ao_converter');
+  if (!t || !(v > 0)) { box.classList.remove('show'); return; }
+  box.innerHTML = `
+    <div class="l"><span>Valor do título</span><span>${brl(t.valor)} → ${brl(t.valor + v)}</span></div>
+    <div class="l"><span>Caixa</span><span class="${conv ? 'muted' : 'neg'}">${conv ? 'já saiu naquele lançamento' : brl(-v)}</span></div>
+    <div class="l"><span>Resultado</span><span class="muted">não é despesa — vira direito</span></div>
+    <div class="l tot"><span>Conciliação</span><span class="pos">continua fechando</span></div>
+    <div class="conta">${conv
+      ? 'O lançamento escolhido deixa de ser despesa e passa a ser movimentação patrimonial. O montante sobe pelo valor que tinha sido tratado como perda, e o título sobe na mesma medida.'
+      : 'Sai do caixa como movimentação patrimonial, sem afetar o resultado.'}</div>`;
+  box.classList.add('show');
+}
+function salvarAporte() {
+  limpaErro('ao_erro');
+  const t = DB.titulos.find(x => x.id === val('ao_id'));
+  if (!t) return erro('ao_erro', 'Título não encontrado.');
+  const v = num(val('ao_valor')), data = val('ao_data'), fonte = val('ao_fonte');
+  const conv = movs().find(x => x.id === val('ao_converter'));
+  if (!(v > 0)) return erro('ao_erro', 'Informe o valor do aporte.');
+  if (!data) return erro('ao_erro', 'Informe a data.');
+  if (mesFechado(mesDe(data)))
+    return erro('ao_erro', `${mesLabel(mesDe(data))} está fechado. Reabra em Fechamento ou escolha outra data.`);
+  if (conv && Math.abs(conv.saida - v) > .005)
+    return erro('ao_erro', `O lançamento escolhido é de ${brl(conv.saida)}. Para converter, o aporte tem que ser desse valor.`);
+
+  const conta = contaPorChave('patrimonial_aporte_titulo');
+  t.valor = +(t.valor + v).toFixed(2);
+  const obs = val('ao_obs').trim();
+  t.obs = (t.obs ? t.obs + ' | ' : '') + `Aporte de ${brl(v)} em ${fmtBR(data)}` + (obs ? ' — ' + obs : '');
+
+  if (conv) {
+    // o dinheiro já saiu; o que muda é a natureza: deixa de ser despesa
+    conv.resultado = null;
+    conv.contaId = conta ? conta.id : null;
+    conv.tituloId = t.id;
+    conv.descricao = conv.descricao + ' (aporte em cota)';
+  } else {
+    DB.movs.push({
+      id: uid(), seq: proximaSeq(), fonte, data, tipo: 'TRANSFERENCIA',
+      descricao: `Aporte em ${t.cliente}${t.sacado ? ' · ' + t.sacado : ''}` + (obs ? ' — ' + obs : ''),
+      cliente: t.cliente, tituloId: t.id, operacaoId: null,
+      entrada: null, saida: v, resultado: null,
+      contaId: conta ? conta.id : null, servico: null, obs: 'Aporte em cota/título', deletedAt: null
+    });
+  }
+  save(); closeModal('ovAporte'); render();
+  toast(`Aporte de ${brl(v)} — título agora vale ${brl(t.valor)}`);
 }
 
 /* =========================================================================
