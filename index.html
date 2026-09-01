@@ -1316,6 +1316,10 @@ function montante(f, ate) {
    subtraído na conciliação, para a tela dizer a verdade em vez de esconder um
    passivo com sinal negativo no meio dos ativos. */
 const ehCaptacao = t => t.tipo === 'CAPTACAO';
+/* Quanto um título pesa na conciliação. Captação entra subtraindo: crescer a
+   dívida com o investidor REDUZ a soma. Quem mexe no valor de um título precisa
+   olhar para cá, e não para a variação crua do valor de face. */
+const pesoConc = (tipo, valor) => (tipo === 'CAPTACAO' ? -1 : 1) * (valor || 0);
 const somaTit = (f, filtro) => tits()
   .filter(t => t.fonte === f && emAberto(t) && filtro(t))
   .reduce((s, t) => s + (t.valor || 0), 0);
@@ -3050,21 +3054,51 @@ function salvarAnt() {
   if (mesFechado(mesDe(envio))) return erro('at_erro', `${mesLabel(mesDe(envio))} está fechado. Reabra em Fechamento para lançar nesse mês.`);
 
   const id = val('at_id');
-  const segue = () => {
-    const t0 = id ? DB.titulos.find(x => x.id === id) : null;
-    salvarAntAgora(id, t0, fonte, cli, sac, envio, prev2, v, taxa, obs);
-  };
+  const t0 = id ? DB.titulos.find(x => x.id === id) : null;
+  // Antecipação vinda da planilha não tem envio no razão (o efeito de caixa já
+  // está no saldo inicial). Nela, mexer no valor ou no lado não tem
+  // contrapartida nenhuma: precisa de um ajuste, e ajuste pede data aberta.
+  const semEnvio = t0 && !movs().some(m => m.tituloId === id && m.tipo === 'ANTECIPACAO_ENVIO');
+  const efeito = t0 ? +(pesoConc(atNat, v) - pesoConc(t0.tipo, t0.valor)).toFixed(2) : 0;
+  if (semEnvio && Math.abs(efeito) >= .005 && mesFechado(mesDe(hoje())))
+    return erro('at_erro', `${mesLabel(mesDe(hoje()))} está fechado, e a mudança de valor precisa lançar um ajuste no razão. Reabra o mês em Fechamento.`);
+  const segue = () => salvarAntAgora(id, t0, fonte, cli, sac, envio, prev2, v, taxa, obs);
   return confirmaCaixa(atNat === 'CAPTACAO' ? null : atAvisoCaixa(), 'o envio', segue);
 }
 function salvarAntAgora(id, _t0, fonte, cli, sac, envio, prev2, v, taxa, obs) {
+  let ajuste = 0;
   if (id) {
     const t = DB.titulos.find(x => x.id === id);
+    const tipoAntes = t.tipo, valorAntes = t.valor;
     Object.assign(t, { fonte, cliente: cli, sacado: sac, dataEntrada: envio, dataVenc: prev2 || null,
                        valor: v, obs, taxaMensal: taxa, tipo: atNat });
     // antecipação importada da planilha não tem movimentação de envio (o efeito
     // de caixa já está no saldo inicial) — só atualiza a que existir
     const mv = DB.movs.find(m => m.tituloId === id && m.tipo === 'ANTECIPACAO_ENVIO' && !m.deletedAt);
-    if (mv) Object.assign(mv, { fonte, data: envio, cliente: cli, saida: v, descricao: `${numAntLabel(t.numAntecipacao)} — ${cli}` });
+    const cap = atNat === 'CAPTACAO';
+    // Captação é o espelho no caixa: o dinheiro do investidor ENTROU. Corrigir
+    // o envio sempre pelo lado da saída mexeria no caixa duas vezes ao trocar
+    // de lado — o lançamento tem que acompanhar a natureza nova.
+    if (mv) Object.assign(mv, { fonte, data: envio, cliente: cli,
+      entrada: cap ? v : null, saida: cap ? null : v,
+      descricao: cap ? `Captação — ${cli}` : `${numAntLabel(t.numAntecipacao)} — ${cli}` });
+    else {
+      // Sem envio no razão, mudar valor ou lado não encontra contrapartida em
+      // lugar nenhum e a conciliação passa a acusar a diferença. O ajuste é
+      // essa contrapartida: não passa pelo caixa, só o patrimônio acompanha.
+      ajuste = +(pesoConc(atNat, v) - pesoConc(tipoAntes, valorAntes)).toFixed(2);
+      if (Math.abs(ajuste) >= .005) {
+        const conta = contaPorChave(ajuste > 0 ? 'receita_ajuste' : 'despesa_ajuste');
+        DB.movs.push({
+          id: uid(), seq: proximaSeq(), fonte: t.fonte, data: hoje(), tipo: 'AJUSTE',
+          descricao: `Ajuste ${cap ? 'na captação' : 'na antecipação'} ${cli} (${brl(valorAntes)} → ${brl(v)})`,
+          cliente: cli, tituloId: t.id, operacaoId: null,
+          entrada: null, saida: null, resultado: ajuste,
+          contaId: conta ? conta.id : null, servico: null,
+          obs: 'Contrapartida da edição do título', deletedAt: null
+        });
+      } else ajuste = 0;
+    }
   } else {
     const numero = Math.max(0, ...DB.titulos.map(t => t.numAntecipacao || 0)) + 1;
     const tid = uid(), desc = `${numAntLabel(numero)} — ${cli}`;
@@ -3086,14 +3120,33 @@ function salvarAntAgora(id, _t0, fonte, cli, sac, envio, prev2, v, taxa, obs) {
     });
   }
   garantirCliente(cli); garantirSacado(sac);
-  save(); closeModal('ovAnt'); render(); toast(id ? 'Antecipação atualizada' : `Antecipação de ${brl(v)} registrada`);
+  save(); closeModal('ovAnt'); render();
+  toast(id ? (ajuste ? `Antecipação atualizada — ajuste de ${brl(ajuste)} lançado` : 'Antecipação atualizada')
+           : `Antecipação de ${brl(v)} registrada`);
 }
 function excluirAnt(id) {
   if (!podeEditarAnt(id)) return toast('Essa antecipação já retornou e não pode ser excluída');
   const t = DB.titulos.find(x => x.id === id); if (!t) return;
-  confirmar(`Mover para Excluídos a antecipação de ${brl(t.valor)} para ${t.cliente}?`, () => {
+  // Com envio no razão, excluir os dois juntos já fecha a conta sozinho. Sem
+  // envio (veio da planilha), o título sai do mapa sem que nada compense —
+  // aí a contrapartida é um ajuste.
+  const temEnvio = movs().some(m => m.tituloId === id && m.tipo === 'ANTECIPACAO_ENVIO');
+  const efeito = temEnvio ? 0 : +(-pesoConc(t.tipo, t.valor)).toFixed(2);
+  confirmar(`Mover para Excluídos a ${ehCaptacao(t) ? 'captação' : 'antecipação'} de ${brl(t.valor)} para ${t.cliente}?`
+    + (efeito ? ` Será lançado um ajuste de ${brl(efeito)} no razão como contrapartida — sem ele a conciliação passaria a acusar essa diferença.` : ''), () => {
     const ts = Date.now(); t.deletedAt = ts;
     DB.movs.forEach(m => { if (m.tituloId === id && m.tipo === 'ANTECIPACAO_ENVIO') m.deletedAt = ts; });
+    if (efeito) {
+      const conta = contaPorChave(efeito > 0 ? 'receita_ajuste' : 'despesa_ajuste');
+      DB.movs.push({
+        id: uid(), seq: proximaSeq(), fonte: t.fonte, data: hoje(), tipo: 'AJUSTE',
+        descricao: `Baixa ${ehCaptacao(t) ? 'da captação' : 'da antecipação'} ${t.cliente} (${brl(t.valor)})`,
+        cliente: t.cliente, tituloId: null, operacaoId: null,
+        entrada: null, saida: null, resultado: efeito,
+        contaId: conta ? conta.id : null, servico: null,
+        obs: 'Contrapartida da exclusão do título', deletedAt: null
+      });
+    }
     save(); render(); toast('Antecipação movida para Excluídos');
   }, 'Excluir antecipação');
 }
@@ -4535,19 +4588,20 @@ function tiCalc() {
   const t = DB.titulos.find(x => x.id === val('ti_id')), box = el('ti_memo'), wrap = el('ti_ajusteWrap');
   if (!t) return;
   const novo = num(val('ti_valor'));
-  const trocaLado = (val('ti_tipo') === 'CAPTACAO') !== ehCaptacao(t)
-    && Math.abs(Math.abs(novo) - Math.abs(t.valor)) < .005;
-  const dif = trocaLado ? 0 : +(novo - t.valor).toFixed(2);
-  if (t.status === 'PAGO' || !isFinite(novo) || Math.abs(dif) < .005) {
+  // O ajuste segue o efeito na conciliação, não a variação do valor de face:
+  // trocar antecipação negativa por captação positiva do mesmo tamanho é a mesma
+  // dívida escrita do jeito certo (efeito zero), e aumentar uma captação reduz a soma.
+  const efeito = +(pesoConc(val('ti_tipo'), novo) - pesoConc(t.tipo, t.valor)).toFixed(2);
+  if (t.status === 'PAGO' || !isFinite(novo) || Math.abs(efeito) < .005) {
     box.classList.remove('show'); wrap.style.display = 'none'; return;
   }
   const comAjuste = el('ti_ajuste').checked;
-  const conta = contaPorChave(dif > 0 ? 'receita_ajuste' : 'despesa_ajuste');
+  const conta = contaPorChave(efeito > 0 ? 'receita_ajuste' : 'despesa_ajuste');
   box.innerHTML = `
     <div class="l"><span>Valor de face</span><span>${brl(t.valor)} → ${brl(novo)}</span></div>
-    <div class="l"><span>Diferença</span><span class="${dif < 0 ? 'neg' : 'pos'}">${brl(dif)}</span></div>
+    <div class="l"><span>Efeito na conciliação</span><span class="${efeito < 0 ? 'neg' : 'pos'}">${brl(efeito)}</span></div>
     <div class="l tot"><span>${comAjuste ? 'Ajuste que será lançado' : 'Diferença que sobra na conciliação'}</span>
-      <span class="${comAjuste ? '' : 'neg'}">${brl(comAjuste ? dif : dif)}</span></div>
+      <span class="${comAjuste ? '' : 'neg'}">${brl(efeito)}</span></div>
     <div class="conta">${comAjuste
       ? `Entra no razão como "${esc(conta ? conta.nome : 'Ajuste')}" em ${fmtBR(hoje())}, sem passar pelo caixa. Saldo + títulos continua batendo com o montante.`
       : 'Sem o ajuste, o montante não acompanha e a conciliação passa a acusar essa diferença.'}</div>`;
@@ -4569,13 +4623,14 @@ function salvarTitulo() {
   if (venc && entrada && venc < entrada) return erro('ti_erro', 'O vencimento não pode ser antes da data da operação.');
 
   const novoTipo = pago ? t.tipo : val('ti_tipo');
-  // Trocar de antecipação negativa para captação positiva é a mesma dívida
-  // escrita do jeito certo: o efeito na conciliação é zero, então não há
-  // ajuste a lançar. Só a mudança de valor de verdade pede contrapartida.
-  const trocaDeLado = (novoTipo === 'CAPTACAO') !== ehCaptacao(t)
-    && Math.abs(Math.abs(novoValor) - Math.abs(t.valor)) < .005;
-  const dif = trocaDeLado ? 0 : +(novoValor - t.valor).toFixed(2);
-  const lancaAjuste = !pago && Math.abs(dif) >= .005 && el('ti_ajuste').checked;
+  const valorAntes = t.valor;
+  // A contrapartida acompanha o efeito na conciliação, não a variação do valor de
+  // face. Trocar antecipação negativa por captação positiva do mesmo tamanho é a
+  // mesma dívida escrita do jeito certo e dá efeito zero; se o valor também
+  // mudou, só essa diferença de verdade é lançada — com o sinal certo, porque
+  // aumentar uma captação reduz a soma em vez de aumentá-la.
+  const efeito = +(pesoConc(novoTipo, novoValor) - pesoConc(t.tipo, t.valor)).toFixed(2);
+  const lancaAjuste = !pago && Math.abs(efeito) >= .005 && el('ti_ajuste').checked;
   if (lancaAjuste && mesFechado(mesDe(hoje())))
     return erro('ti_erro', `${mesLabel(mesDe(hoje()))} está fechado, e o ajuste precisa de uma data aberta. Reabra o mês em Fechamento.`);
 
@@ -4593,18 +4648,18 @@ function salvarTitulo() {
   garantirCliente(cliente); garantirSacado(sacado);
 
   if (lancaAjuste) {
-    const conta = contaPorChave(dif > 0 ? 'receita_ajuste' : 'despesa_ajuste');
+    const conta = contaPorChave(efeito > 0 ? 'receita_ajuste' : 'despesa_ajuste');
     DB.movs.push({
       id: uid(), seq: proximaSeq(), fonte: t.fonte, data: hoje(), tipo: 'AJUSTE',
-      descricao: `Ajuste no título ${cliente}${t.nf ? ' — NF ' + t.nf : ''} (${brl(t.valor - dif)} → ${brl(novoValor)})`,
+      descricao: `Ajuste no título ${cliente}${t.nf ? ' — NF ' + t.nf : ''} (${brl(valorAntes)} → ${brl(novoValor)})`,
       cliente, tituloId: t.id, operacaoId: null,
       // não passa pelo caixa: só o patrimônio acompanha a mudança do título
-      entrada: null, saida: null, resultado: dif,
+      entrada: null, saida: null, resultado: efeito,
       contaId: conta ? conta.id : null, servico: null, obs: 'Contrapartida da edição do título', deletedAt: null
     });
   }
   save(); closeModal('ovTitulo'); render();
-  toast(lancaAjuste ? `Título salvo — ajuste de ${brl(dif)} lançado` : 'Título salvo');
+  toast(lancaAjuste ? `Título salvo — ajuste de ${brl(efeito)} lançado` : 'Título salvo');
 }
 
 function excluirTitulo() {
@@ -4612,24 +4667,27 @@ function excluirTitulo() {
   if (t.status === 'PAGO')
     return erro('ti_erro', 'Título baixado não pode ser excluído. Desfaça a baixa em Recebidos primeiro.');
   const temEnvio = movs().some(m => m.tituloId === t.id && m.tipo === 'ANTECIPACAO_ENVIO');
+  // Tirar o título do mapa desfaz o peso que ele tinha: um ativo some da soma
+  // (ajuste negativo), uma captação deixa de subtrair (ajuste positivo).
+  const efeitoExcluir = +(-pesoConc(t.tipo, t.valor)).toFixed(2);
   // Antecipação com envio no razão já tem contrapartida: some o título e some a
   // saída de caixa, e a conta continua fechando sozinha. Título avulso, não —
   // ele sai do "na rua" sem que nada compense, então precisa do ajuste.
   const msg = temEnvio
     ? `Excluir a antecipação de ${brl(t.valor)} para ${t.cliente}? O envio no razão sai junto, e a conciliação continua fechando.`
-    : `Excluir o título de ${brl(t.valor)} de ${t.cliente}? Ele sai do "na rua", então será lançado um ajuste de ${brl(-t.valor)} no razão como contrapartida — sem isso a conciliação passaria a acusar essa diferença.`;
+    : `Excluir o título de ${brl(t.valor)} de ${t.cliente}? Ele sai ${ehCaptacao(t) ? 'do passivo' : 'do "na rua"'}, então será lançado um ajuste de ${brl(efeitoExcluir)} no razão como contrapartida — sem isso a conciliação passaria a acusar essa diferença.`;
   confirmar(msg, () => {
     const ts = Date.now();
     t.deletedAt = ts;
     if (temEnvio) {
       DB.movs.forEach(m => { if (m.tituloId === t.id && m.tipo === 'ANTECIPACAO_ENVIO') m.deletedAt = ts; });
     } else {
-      const conta = contaPorChave('despesa_ajuste');
+      const conta = contaPorChave(efeitoExcluir > 0 ? 'receita_ajuste' : 'despesa_ajuste');
       DB.movs.push({
         id: uid(), seq: proximaSeq(), fonte: t.fonte, data: hoje(), tipo: 'AJUSTE',
         descricao: `Baixa do título ${t.cliente}${t.nf ? ' — NF ' + t.nf : ''} (${brl(t.valor)})`,
         cliente: t.cliente, tituloId: null, operacaoId: null,
-        entrada: null, saida: null, resultado: -t.valor,
+        entrada: null, saida: null, resultado: efeitoExcluir,
         contaId: conta ? conta.id : null, servico: null, obs: 'Contrapartida da exclusão do título', deletedAt: null
       });
     }
