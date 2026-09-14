@@ -973,6 +973,35 @@ tr.crmov td{border-bottom-color:var(--line)}
     <button class="btn btn-gold" onclick="salvarRateio()">Ratear e baixar</button></div>
 </div></div>
 
+<!-- ===================== Pagamento de parcela do banco ===================== -->
+<div class="overlay" id="ovParcPgto"><div class="modal">
+  <div class="modal-head"><h3 id="ppTit">Pagar parcela</h3><button class="modal-x" onclick="closeModal('ovParcPgto')">×</button></div>
+  <div class="modal-body">
+    <div class="alert" id="pp_info"></div>
+    <div class="field"><label>Como registrar</label>
+      <select id="pp_modo" onchange="ppCalc()">
+        <option value="CAIXA">Pagar: sai do caixa e entra no razão</option>
+        <option value="SO_CONTROLE">Só marcar como paga, sem lançamento</option>
+      </select></div>
+    <div id="pp_camposWrap">
+      <div class="fgrid">
+        <div class="field"><label>Conta de origem</label><select id="pp_fonte" onchange="ppCalc()"></select></div>
+        <div class="field"><label>Data do pagamento</label><input type="date" id="pp_data" onchange="ppCalc()"></div>
+      </div>
+      <div class="fgrid">
+        <div class="field"><label>Valor pago</label><input type="number" step="0.01" min="0.01" id="pp_valor" oninput="ppCalc()"></div>
+        <div class="field"><label>Quanto disso é juros</label><input type="number" step="0.01" min="0" id="pp_juros" oninput="ppCalc()">
+          <div class="hint">O resto amortiza o contrato e não é despesa.</div></div>
+      </div>
+      <div id="pp_caixa"></div>
+    </div>
+    <div class="memo" id="pp_memo"></div>
+    <div class="erro" id="pp_erro"></div>
+  </div>
+  <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal('ovParcPgto')">Cancelar</button>
+    <button class="btn btn-gold" onclick="salvarParcPgto()">Registrar pagamento</button></div>
+</div></div>
+
 <!-- ===================== Cliente ===================== -->
 <div class="overlay" id="ovCliente"><div class="modal">
   <div class="modal-head"><h3 id="clTit">Novo cliente</h3><button class="modal-x" onclick="closeModal('ovCliente')">×</button></div>
@@ -1793,13 +1822,17 @@ const svgIc = k => '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" 
 /* O menu segue o dia: primeiro o que fazer hoje, depois o que se opera, depois
    o que se analisa, e por último o que quase nunca se mexe. Carteira reúne o
    que era "Títulos a vencer" e "Recebidos", que eram a mesma coisa em dois
-   momentos; Correção deixou o menu e virou aba dentro de Clientes, que é onde
-   a pergunta nasce. */
+   momentos.
+
+   Correção tem item próprio porque é ali que se controla o cliente: quem manda
+   várias antecipações para o mesmo cliente acompanha um saldo só, principal
+   mais juros, e vai abatendo dele. Olhar antecipação por antecipação, cada uma
+   com o seu juro, é trabalho que o saldo consolidado poupa. */
 const NAV = [
   { g: 'Início', its: [['painel', 'Visão geral']] },
   { g: 'Operação', its: [['razao', 'Movimentações'], ['carteira', 'Carteira'],
                          ['antecipacoes', 'Antecipações'], ['captacoes', 'Captações']] },
-  { g: 'Gestão', its: [['clientes', 'Clientes'], ['resultado', 'Resultado'],
+  { g: 'Gestão', its: [['clientes', 'Clientes'], ['correcao', 'Correção'], ['resultado', 'Resultado'],
                        ['projecao', 'Fluxo de caixa'], ['contas', 'Parcelas bancárias']] },
   { g: 'Administração', its: [['fechamento', 'Fechamento'], ['cadastros', 'Fontes e taxas'],
                               ['plano', 'Plano de contas'],
@@ -1813,7 +1846,7 @@ const SECAO = {
   antecipacoes: ['Antecipações', 'Recurso enviado que ainda não voltou, com juros projetados'],
   captacoes: ['Captações', 'Recurso de terceiro no seu caixa — e o custo que ele gera'],
   recebidos: ['Recebidos', 'Títulos e antecipações já baixados'],
-  correcao: ['Correção', 'A planilha de correção do recurso na rua, dia a dia, por cliente'],
+  correcao: ['Correção', 'O saldo do cliente corrigido dia a dia: principal mais juros, num número só'],
   clientes: ['Clientes', 'Quanto cada um deve hoje, a correção dia a dia e os cadastros'],
   resultado: ['Resultado', 'Receitas e despesas por conta, com comparativo do período anterior'],
   projecao: ['Fluxo de caixa', 'O que já está contratado, dia a dia, a partir do saldo de hoje'],
@@ -2630,22 +2663,14 @@ VIEWS.contas = function () {
   }).join('');
 
   return stats + alerta + anel + filtros +
-    `<div class="panel"><div class="panel-head"><h2>Parcelas<small>${lista.length} parcela(s) no filtro · ${brl(somaFiltro)} — nada aqui entra no caixa nem no resultado</small></h2></div>
+    `<div class="panel"><div class="panel-head"><h2>Parcelas<small>${lista.length} parcela(s) no filtro · ${brl(somaFiltro)} — pagar tira do caixa e só o juro vira despesa</small></h2></div>
       <div class="tbl-scroll"><table><thead><tr><th>Contrato</th><th>Parcela</th><th>Vencimento</th><th>Status</th>
         <th class="num">Valor</th><th>Pago em</th><th class="num">Valor pago</th><th></th></tr></thead>
       <tbody>${corpo || `<tr><td colspan="8"><div class="empty">Nenhuma parcela com esses filtros.</div></td></tr>`}</tbody></table></div></div>`;
 };
 function cpSet(g, v) { cpFiltro[g] = v; render(); }
-function cpPagar(id) {
-  const p = cgParcelas().find(x => x.id === id); if (!p) return;
-  p.pago = true; p.dataPgto = hoje(); p.valorPago = p.valor;
-  save(); render(); toast(`Parcela ${p.num}/${p.total} baixada`);
-}
-function cpDesfazer(id) {
-  const p = cgParcelas().find(x => x.id === id); if (!p) return;
-  p.pago = false; p.dataPgto = null; p.valorPago = 0;
-  save(); render(); toast('Baixa desfeita');
-}
+/* cpPagar e cpDesfazer vivem em src/26-parcela-pgto.js: pagar parcela passou
+   a mexer no caixa, e isso pede tela e contrapartida próprias. */
 
 /* ---------- Cadastros ----------
    Um cartão por cliente/sacado em vez de uma tabela de campos apertados: cabe
@@ -6105,9 +6130,15 @@ function extratoHTML(p) {
    A planilha de correção reproduzida dentro do sistema: uma linha por dia,
    o saldo de ontem rendendo hoje, crédito abatendo e débito somando.
 
-   A diferença é que aqui a coluna saldo vem quebrada em principal e juros,
-   e o crédito abate juros primeiro. Sem essa quebra dá para ver quanto o
-   cliente deve, mas não dá para ver o que está acontecendo com a dívida:
+   O ponto desta tela é o saldo ser UM SÓ por cliente. Um cliente que recebeu
+   oito antecipações tem oito juros correndo, e acompanhar cada um separado é
+   trabalho que não paga: o que se cobra dele é um número, principal mais
+   juros, e é desse número que se abate quando o dinheiro entra. As
+   antecipações continuam registradas uma a uma — o que muda é que o controle
+   passa a ser do cliente, não de cada envio.
+
+   A coluna saldo pode ser aberta em principal e juros, para quando a pergunta
+   deixa de ser "quanto ele deve" e passa a ser "o que a dívida está fazendo":
    pagamento que só cobre a correção do mês deixa o principal parado, e no
    saldo consolidado isso não aparece.
    ========================================================================= */
@@ -7100,6 +7131,136 @@ function painelPendencias() {
 }
 
 /* =========================================================================
+   Pagamento de parcela do banco, com efeito no caixa
+
+   "Marcar paga" só trocava um sinalizador: a parcela sumia da lista de
+   pendentes e o dinheiro continuava no caixa. Quem acompanhava as duas telas
+   via o contrato andando e o saldo parado, e a diferença só aparecia na
+   conciliação do banco, dias depois.
+
+   Agora o pagamento é um lançamento de verdade. O contrato de capital de giro
+   tem duas partes que não são a mesma coisa:
+     amortização  devolve o principal tomado — sai do caixa, não é despesa
+     juros        é o preço do dinheiro — sai do caixa e é despesa
+   Quem quiser continuar só controlando o contrato, sem mexer no caixa, tem a
+   opção de registrar sem lançamento: às vezes a parcela já foi baixada no
+   razão por outro caminho, e lançar de novo dobraria a saída.
+   ========================================================================= */
+let cpPagando = null;
+
+function cpPagar(id) {
+  const p = cgParcelas().find(x => x.id === id); if (!p) return;
+  cpPagando = p;
+  limpaErro('pp_erro');
+  el('ppTit').textContent = `Pagar parcela ${p.num}/${p.total}`;
+  el('pp_info').innerHTML = `<span><b>${esc(p.contrato)}</b>${p.credor ? ' · ' + esc(p.credor) : ''}
+    — parcela ${p.num} de ${p.total}, vence ${fmtBR(p.vencimento)}
+    ${p.vencimento < hoje() ? `<span class="chip chip-bad">vencida há ${diasEntre(p.vencimento, hoje())} dia(s)</span>` : ''}</span>`;
+  el('pp_fonte').innerHTML = opcoesFonte(DB.fontes[0] && DB.fontes[0].codigo);
+  setVal('pp_data', p.vencimento < hoje() ? hoje() : p.vencimento);
+  setVal('pp_valor', p.valor);
+  setVal('pp_juros', '');
+  setVal('pp_modo', 'CAIXA');
+  ppCalc();
+  openModal('ovParcPgto');
+  setTimeout(() => el('pp_valor').focus(), 60);
+}
+
+function ppCalc() {
+  const p = cpPagando; if (!p) return;
+  const v = num(val('pp_valor')) || 0;
+  const j = num(val('pp_juros')) || 0;
+  const amort = +(v - j).toFixed(2);
+  const modo = val('pp_modo');
+  const semCaixa = modo === 'SO_CONTROLE';
+  el('pp_camposWrap').style.display = semCaixa ? 'none' : 'block';
+
+  const dif = +(v - (p.valor || 0)).toFixed(2);
+  el('pp_memo').innerHTML = semCaixa
+    ? `<div class="l"><span>Marca a parcela como paga</span><span>${brl(v)}</span></div>
+       <div class="l"><span>Sai do caixa</span><span class="muted">nada</span></div>
+       <div class="l tot"><span>Efeito no resultado</span><span class="muted">nenhum</span></div>
+       <div class="conta">Só controle do contrato. Use quando a saída já estiver lançada no razão
+         por outro caminho — lançar de novo tiraria o dinheiro duas vezes.</div>`
+    : `<div class="l"><span>Sai do caixa</span><span class="neg">${brl(-v)}</span></div>
+       <div class="l"><span>Amortiza o contrato</span><span>${brl(amort)}</span></div>
+       <div class="l"><span>Juros do período</span><span class="neg">${brl(-j)}</span></div>
+       <div class="l tot"><span>Despesa no resultado</span><span class="${j > 0 ? 'neg' : 'muted'}">${j > 0 ? brl(-j) : 'nenhuma'}</span></div>
+       <div class="conta">Saem duas linhas no razão: a amortização, em conta patrimonial, e os juros,
+         em despesa. Assim o patrimônio acompanha a saída inteira e a DRE enxerga só o juro,
+         que é o preço do dinheiro.
+         ${j > 0 ? '' : 'Sem juros informados, a parcela inteira conta como amortização e a DRE não muda.'}
+         ${Math.abs(dif) > .005 ? `<br>A parcela estava prevista em ${brl(p.valor)}: ${dif > 0 ? 'está pagando ' + brl(dif) + ' a mais' : 'está pagando ' + brl(-dif) + ' a menos'}.` : ''}</div>`;
+  el('pp_memo').classList.add('show');
+  avisoCaixa('pp_caixa', val('pp_fonte'), semCaixa ? 0 : v, val('pp_data'), {});
+}
+
+function salvarParcPgto() {
+  limpaErro('pp_erro');
+  const p = cpPagando; if (!p) return;
+  const v = num(val('pp_valor')), j = num(val('pp_juros')) || 0;
+  const data = val('pp_data'), fonte = val('pp_fonte'), modo = val('pp_modo');
+  if (!(v > 0)) return erro('pp_erro', 'Informe o valor pago.');
+  if (j < 0 || j > v + .005) return erro('pp_erro', 'Os juros precisam caber dentro do valor pago.');
+  if (!data) return erro('pp_erro', 'Informe a data do pagamento.');
+  if (modo !== 'SO_CONTROLE' && mesFechado(mesDe(data)))
+    return erro('pp_erro', `${mesLabel(mesDe(data))} está fechado. Reabra em Fechamento ou escolha outra data.`);
+
+  const aplicar = () => {
+    p.pago = true; p.dataPgto = data; p.valorPago = v;
+    if (modo !== 'SO_CONTROLE') {
+      const amort = +(v - j).toFixed(2);
+      const lote = uid();
+      const linha = (rot, saida, chave) => {
+        const conta = contaPorChave(chave);
+        DB.movs.push({
+          id: uid(), seq: proximaSeq(), fonte, data, tipo: 'CAPITAL_GIRO',
+          descricao: `Parcela ${p.num}/${p.total} — ${p.contrato} · ${rot}`,
+          cliente: p.credor || 'Banco', tituloId: null, operacaoId: null,
+          entrada: null, saida,
+          // O patrimônio acompanha a saída inteira, porque a dívida com o banco
+          // não entra na conciliação como passivo: o que sai do caixa sai do
+          // patrimônio. A DRE, essa sim, só enxerga o juro — a amortização cai
+          // numa conta de Movimentação Patrimonial, que a DRE ignora.
+          resultado: -saida,
+          contaId: conta ? conta.id : null, servico: null,
+          parcelaId: p.id, loteParcela: lote,
+          obs: 'Pagamento de parcela de capital de giro', deletedAt: null
+        });
+      };
+      if (amort > .005) linha('amortização', amort, 'patrimonial_amortizacao_banco');
+      if (j > .005) linha('juros', j, 'despesa_capital_giro');
+    }
+    save(); render();
+    toast(modo === 'SO_CONTROLE'
+      ? `Parcela ${p.num}/${p.total} marcada paga, sem lançamento`
+      : `Parcela ${p.num}/${p.total} paga — ${brl(v)} saíram do caixa`);
+  };
+
+  if (modo === 'SO_CONTROLE') return aplicar();
+  confirmaCaixa(checaCaixa(fonte, v, data), 'a parcela', aplicar);
+}
+
+/* Desfazer tira o lançamento junto: parcela que volta a pendente sem o
+   dinheiro voltar ao caixa deixaria o contrato e o razão discordando. */
+function cpDesfazer(id) {
+  const p = cgParcelas().find(x => x.id === id); if (!p) return;
+  const lanc = movs().filter(m => m.parcelaId === id);
+  const total = lanc.reduce((s, m) => s + (m.saida || 0), 0);
+  const seguir = () => {
+    p.pago = false; p.dataPgto = null; p.valorPago = 0;
+    if (lanc.length) DB.movs = DB.movs.filter(m => m.parcelaId !== id);
+    save(); render();
+    toast(lanc.length ? `Baixa desfeita — ${brl(total)} voltaram ao caixa` : 'Baixa desfeita');
+  };
+  if (!lanc.length) return seguir();
+  if (bloqueadoPorFechamento(lanc[0].data)) return;
+  confirmar(`Desfazer o pagamento da parcela ${p.num}/${p.total}?`
+    + `<br><br>Os <b>${brl(total)}</b> voltam ao caixa e o lançamento sai do razão.`,
+    seguir, 'Desfazer pagamento');
+}
+
+/* =========================================================================
    Backup e gravação do arquivo
    ========================================================================= */
 function exportData() {
@@ -7178,7 +7339,8 @@ const ACOES_ESCRITA = [
   'excluirLanc', 'excluirOper', 'excluirAnt', 'excluirTitulo', 'excluirCliente',
   'excluirSacado', 'excluirConta', 'desfazerBaixa', 'desfazerParcial', 'desfazerPerda',
   'desfazerApropriacao', 'desfazerApropriacaoAntiga', 'desfazerRateio',
-  'rtCorrigir', 'rtCorrigirTodos', 'alternarFechamento', 'cgAlternarPago',
+  'rtCorrigir', 'rtCorrigirTodos', 'alternarFechamento',
+  'cpPagar', 'cpDesfazer', 'salvarParcPgto',
   'restaurar', 'importData', 'apMarcar', 'apTaxaTodos'
 ];
 
