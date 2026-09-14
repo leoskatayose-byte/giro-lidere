@@ -1786,10 +1786,10 @@ const retornosInflados = fs => movs()
    O sinal vem do próprio valor: título positivo é dinheiro na rua e os juros
    são receita; título negativo é recurso de terceiro na mão da empresa, e os
    juros são despesa. A fórmula é a mesma. */
-/* Antecipação rende desde que o dinheiro saiu; título de cliente só rende
-   depois de vencer — antes disso o prazo é o combinado, não atraso. */
+/* Rende por dia quem teve o dinheiro na rua: antecipação e captação. Título
+   de cliente não rende, porque o ganho dele é o deságio, cobrado na operação. */
 const naRua = t => t.tipo === 'ANTECIPACAO' || ehCaptacao(t);
-const jurosDesde = t => t.jurosAte || (naRua(t) ? t.dataEntrada : (t.dataVenc || t.dataEntrada));
+const jurosDesde = t => t.jurosAte || t.dataEntrada;
 function jurosAApropriar(t, ate, taxaEscolhida) {
   const desde = jurosDesde(t);
   const dias = diasEntre(desde, ate);
@@ -1801,16 +1801,15 @@ function jurosAApropriar(t, ate, taxaEscolhida) {
 }
 /* A conta do juro depende da natureza do que rendeu, não do sinal: recurso que
    volta de antecipação tem conta própria; juro de título de cliente é juro. */
+/* Juro de antecipação tem conta própria; de captação é custo. Título não
+   entra aqui: o ganho dele é o deságio, e já foi reconhecido na operação. */
 function chaveJuros(t) {
   if (ehCaptacao(t)) return 'despesa_juros';
-  if (t.tipo === 'ANTECIPACAO') return 'receita_retorno_antecipacao';
-  // Parcela de juros que rende de novo continua na conta dela: o juro do juro
-  // de uma antecipação não vira, de repente, juro de título.
   if (t.tipo === 'JUROS' && t.contaId) {
     const c = contaPorId(t.contaId);
     if (c && c.chave) return c.chave;
   }
-  return 'receita_juros';
+  return 'receita_retorno_antecipacao';
 }
 
 /* ===== Prorrogação =====
@@ -2369,30 +2368,43 @@ VIEWS.titulos = function (soVencidos) {
 };
 
 /* ---------- Antecipações ---------- */
+/* ---------- Antecipações ----------
+   Aqui é o registro do envio: para quem foi, quanto, quando saiu e quando
+   deve voltar. Juros não aparecem nesta tela, e isso é decisão de projeto,
+   não esquecimento.
+
+   Título de cliente e antecipação ganham dinheiro de formas diferentes. No
+   título o ganho é o deságio, cobrado de uma vez na operação: o que está na
+   lista já é o valor cheio a receber. Na antecipação o ganho corre por dia, e
+   o juro de cada envio isolado não é o que se cobra — o cliente que recebeu
+   oito antecipações paga um saldo só. Por isso o juro vive na Correção, onde
+   ele é do cliente, e não aqui, onde ele seria de cada envio. */
 VIEWS.antecipacoes = function () {
   const fs = fontesDoFiltro();
   const lista = tits().filter(t => t.tipo === 'ANTECIPACAO' && emAberto(t) && fs.includes(t.fonte))
-    .map(t => { const p = projecao(t, hoje()); return { ...t, st: statusCalc(t), jurosHoje: p.dias > 0 ? p.juros : 0, comJuros: p.dias > 0 ? p.total : t.valor, dias: p.dias }; });
+    .map(t => ({ ...t, st: statusCalc(t), dias: t.dataEntrada ? diasEntre(t.dataEntrada, hoje()) : null }));
   const total = lista.reduce((s, t) => s + (t.valor || 0), 0);
-  const jur = lista.reduce((s, t) => s + t.jurosHoje, 0);
   const semData = lista.filter(t => !t.dataVenc);
   const venc = lista.filter(t => t.st === 'VENCIDO');
+  const clientes = new Set(lista.map(t => t.cliente).filter(Boolean));
 
   const stats = `<div class="stats">
-    <div class="stat"><div class="k">Capital aplicado</div><div class="v">${brl(total)}</div><div class="sub">${lista.length} antecipação(ões)</div></div>
-    <div class="stat"><div class="k">Juros acumulados</div><div class="v pos">${brl(jur)}</div><div class="sub">projetado até hoje, ${fmtTaxa(taxaPadrao())}% ao mês</div></div>
-    <div class="stat"><div class="k">Passou da data</div><div class="v ${venc.length ? 'neg' : 'pos'}">${brl(venc.reduce((s, t) => s + t.valor, 0))}</div><div class="sub">${venc.length} em atraso</div></div>
-    <div class="stat"><div class="k">Sem data prevista</div><div class="v ${semData.length ? 'warntxt' : 'pos'}">${semData.length}</div><div class="sub">sem data não há como cobrar</div></div>
+    <div class="stat"><div class="k">Capital aplicado</div><div class="v">${brl(total)}</div>
+      <div class="sub">${lista.length} envio(s) que ainda não voltaram</div></div>
+    <div class="stat"><div class="k">Clientes</div><div class="v">${clientes.size}</div>
+      <div class="sub">cada um com um saldo corrigido próprio</div></div>
+    <div class="stat"><div class="k">Passou da data</div><div class="v ${venc.length ? 'neg' : 'pos'}">${brl(venc.reduce((s, t) => s + t.valor, 0))}</div>
+      <div class="sub">${venc.length} em atraso</div></div>
+    <div class="stat"><div class="k">Sem data prevista</div><div class="v ${semData.length ? 'warntxt' : 'pos'}">${semData.length}</div>
+      <div class="sub">sem data não há como cobrar</div></div>
   </div>`;
 
-  // juros ainda não reconhecidos: o que está sendo ganho mas não aparece no resultado
-  const pend = lista.map(t => jurosAApropriar(t, hoje())).reduce((s, x) => s + (x.dias > 0 ? x.juros : 0), 0);
-  const avisoJuros = Math.abs(pend) > .5 ? `<div class="alert"><b>${brl(pend)} de juros ainda não reconhecidos.</b>
-    As antecipações rendem desde o envio, mas o resultado só enxerga isso quando o dinheiro volta.
-    Apropriar reconhece o que já foi ganho, sem esperar o retorno.
-    <button class="btn btn-sm right" onclick="abrirApropriar()">Apropriar juros</button></div>` : '';
-  const aviso = avisoJuros + (semData.length ? `<div class="alert"><b>${semData.length} antecipação(ões) sem data prevista de retorno.</b>
-    Sem data, o sistema não consegue projetar juros nem apontar atraso. Não precisa combinar com o cliente ainda — precisa existir uma data.</div>` : '');
+  const aviso = `<div class="alert">Esta lista é o registro dos envios: quanto saiu, para quem e quando volta.
+    <b>Os juros ficam na Correção</b>, porque lá eles são do cliente — um saldo só, corrigido dia a dia,
+    de onde se abate quando o dinheiro entra.
+    <button class="btn btn-sm right" onclick="go('correcao')">Ir para a correção</button></div>`
+    + (semData.length ? `<div class="alert"><b>${semData.length} antecipação(ões) sem data prevista de retorno.</b>
+      Sem data, o sistema não aponta atraso. Não precisa estar combinado com o cliente ainda: precisa existir uma data.</div>` : '');
 
   const dados = ordena(filtra(lista, busca.ant, ['cliente', 'sacado']), ordem.ant);
   const geral = fonteFiltro === 'GERAL';
@@ -2400,11 +2412,12 @@ VIEWS.antecipacoes = function () {
       ${geral ? `<td>${fonteTag(t.fonte)}</td>` : ''}
       <td><span class="pill">${numAntLabel(t.numAntecipacao)}</span></td>
       <td>${cliTag(t.cliente)}</td><td>${esc(t.sacado) || '<span class="muted">—</span>'}</td>
-      <td>${fmtBR(t.dataEntrada)}</td><td>${fmtBR(t.dataVenc)}</td>
+      <td>${fmtBR(t.dataEntrada)}${t.dias > 0 ? `<div class="muted" style="font-size:10.5px">há ${t.dias} dia(s)</div>` : ''}</td>
+      <td>${fmtBR(t.dataVenc)}</td>
       <td class="num">${brl(t.valor)}</td>
-      <td class="num">${t.dias > 0 ? `${brl(t.comJuros)}<div class="pos" style="font-size:10.5px">+${brl(t.jurosHoje)} · ${t.dias}d</div>` : '<span class="muted">—</span>'}</td>
       <td><span class="chip ${t.st === 'VENCIDO' ? 'chip-bad' : 'chip-n'}">${STATUS_LABEL[t.st]}</span>${chipParcial(t.id)}</td>
       <td><div class="acoes">
+        <button class="iconbtn" title="Ver o saldo corrigido deste cliente" onclick="irCorrecao('${esc(t.cliente).replace(/'/g, "\\'")}')">⟳</button>
         <button class="iconbtn" title="Editar antecipação" onclick="abrirTitulo('${t.id}')">✎</button>
         <button class="iconbtn" title="Dar baixa por perda: o recurso não vai voltar" onclick="abrirPerda('${t.id}')">✕</button>
         <button class="btn btn-sm" title="Adiar a data prevista de retorno" onclick="abrirProrrog('${t.id}')">Prorrogar</button>
@@ -2412,15 +2425,21 @@ VIEWS.antecipacoes = function () {
 
   return stats + aviso +
     `<div class="filters">${segFonte()}${campoBusca('ant', 'Buscar cliente, sacado...')}</div>
-     <div class="panel"><div class="panel-head"><h2>Antecipações em aberto<small>juros simples, pro rata die — valor × taxa ÷ 30 × dias corridos</small></h2>
-       <button class="btn btn-sm" onclick="abrirApropriar()">⧗ Apropriar juros</button>
+     <div class="panel"><div class="panel-head"><h2>Antecipações em aberto<small>o registro de cada envio: o juro delas é apurado por cliente, na Correção</small></h2>
        <button class="btn btn-sm" onclick="abrirAnt()">+ Antecipação</button></div>
        <div class="tbl-scroll"><table><thead><tr>
          ${geral ? '<th>Fonte</th>' : ''}<th>Nº</th>${th('ant', 'cliente', 'Cliente')}${th('ant', 'sacado', 'Sacado')}
          ${th('ant', 'dataEntrada', 'Envio')}${th('ant', 'dataVenc', 'Retorno previsto')}${th('ant', 'valor', 'Valor', 'num')}
-         <th class="num">Com juros (hoje)</th><th>Status</th><th></th></tr></thead>
-       <tbody>${corpo || `<tr><td colspan="10"><div class="empty">Nenhuma antecipação em aberto.</div></td></tr>`}</tbody></table></div></div>`;
+         <th>Status</th><th></th></tr></thead>
+       <tbody>${corpo || `<tr><td colspan="9"><div class="empty">Nenhuma antecipação em aberto.</div></td></tr>`}</tbody></table></div></div>`;
 };
+
+/* Da lista de envios para o saldo do cliente, que é onde o juro mora. */
+function irCorrecao(cliente) {
+  crCli = cliente; crAte = null;
+  go('correcao');
+}
+
 
 /* ---------- Recebidos ---------- */
 VIEWS.recebidos = function () {
@@ -5154,15 +5173,14 @@ function abrirApropriar(cliente) {
   openModal('ovApropriar');
 }
 
-/* Tudo que pode ter juros a reconhecer até a data. */
+/* Só antecipação e captação rendem juros por dia. Título de cliente ganha no
+   deságio, cobrado de uma vez na operação: cobrar juro dele aqui seria cobrar
+   duas vezes pela mesma coisa. Para título que atrasou existe a prorrogação,
+   que é combinada com o cliente e tem tarifa própria. */
 function apCandidatos(ate, cli) {
-  return tits().filter(t => emAberto(t) && (!cli || t.cliente === cli))
-    .filter(t => naRua(t) || (t.dataVenc && jurosDesde(t) < ate));
+  return tits().filter(t => emAberto(t) && naRua(t) && (!cli || t.cliente === cli));
 }
-
-/* Antecipação e captação já vêm marcadas — é o que a tela sempre fez. Título
-   de cliente entra desmarcado: cobrar mora é decisão, não automatismo. */
-const apPadraoMarcado = t => naRua(t);
+const apPadraoMarcado = () => true;
 function apMarcado(t) {
   return apJuros.sel[t.id] === undefined ? apPadraoMarcado(t) : !!apJuros.sel[t.id];
 }
@@ -5198,7 +5216,7 @@ function calcApropriar() {
 
   if (!apJuros.linhas.length) {
     el('ap_previa').innerHTML = `<div class="empty">Nada a apropriar até ${fmtBR(ate)}${cli ? ' para ' + esc(cli) : ''}.
-      Ou os juros já foram reconhecidos até essa data, ou não há nada em aberto rendendo.</div>`;
+      Ou os juros já foram reconhecidos até essa data, ou não há antecipação em aberto deste cliente.</div>`;
     el('ap_rodape').innerHTML = ''; el('ap_contas').innerHTML = '';
     el('ap_efeito').classList.remove('show');
     el('ap_hist').innerHTML = apHistorico();
@@ -5226,11 +5244,7 @@ function calcApropriar() {
 
 function apNatureza(t) {
   if (ehCaptacao(t)) return '<span class="chip chip-bad">captação — custo</span>';
-  if (t.tipo === 'ANTECIPACAO') return `<span class="chip chip-ok">antecipação</span>`;
-  // Marcar esta linha é cobrar juro sobre juro. É legítimo no regime composto,
-  // mas tem que ser escolha visível — por isso ela vem desmarcada e nomeada.
-  if (t.tipo === 'JUROS') return `<span class="chip chip-warn">parcela de juros — juro sobre juro</span>`;
-  return `<span class="chip chip-n">título${t.nf ? ' ' + esc(t.nf) : ''}</span>`;
+  return `<span class="chip chip-ok">antecipação</span>`;
 }
 
 /* Uma linha de razão por conta: misturar retorno de antecipação com juro de
@@ -6389,10 +6403,47 @@ VIEWS.correcao = function () {
       como <span class="chip chip-warn">abertura</span>.
       Todo o resto abre no razão com um clique.</div>` : '';
 
-  return filtros + stats +
+  return filtros + stats + crJuros(s) +
     (crGrao === 'DIA' ? crTabelaDia(s) : crTabelaMes(s)) +
     crAmortizacao(s) + aviso;
 };
+
+/* Os juros do cliente, que é onde eles vivem. A tela de antecipações lista os
+   envios; aqui é que se decide o que já é direito cobrável e o que ainda está
+   correndo. */
+function crJuros(s) {
+  const fs = fontesDoFiltro();
+  const abertas = crAntecipacoes(fs).filter(t => t.cliente === crCli && emAberto(t));
+  const ate = crAte || hoje();
+  const corridos = +abertas.reduce((a, t) => {
+    const x = jurosAApropriar(t, ate); return a + (x.dias > 0 ? x.efeito : 0);
+  }, 0).toFixed(2);
+  const parcelas = tits().filter(t => t.cliente === crCli && fs.includes(t.fonte)
+    && t.tipo === 'JUROS' && emAberto(t));
+  const apropriado = +parcelas.reduce((a, t) => a + (t.valor || 0), 0).toFixed(2);
+  const acertado = abertas.map(t => t.jurosAte).filter(Boolean).sort().slice(-1)[0];
+  if (!abertas.length && !parcelas.length) return '';
+
+  const nome = esc(crCli).replace(/'/g, "\'");
+  return `<div class="panel" style="margin-bottom:14px"><div class="panel-head">
+      <h2>Juros de ${esc(crCli)}<small>o que já é cobrável e o que ainda está correndo</small></h2>
+      <div class="acoes">
+        <button class="btn btn-sm" onclick="abrirApropriar('${nome}')">⧗ Apropriar</button>
+        <button class="btn btn-sm" onclick="abrirAcerto()">Acertar</button>
+        <button class="btn btn-sm btn-gold" onclick="abrirRateio('${nome}')">＋ Receber</button>
+      </div></div>
+    <div style="padding:0 14px 14px"><div class="memo show" style="margin:0">
+      <div class="l"><span>Juros já apropriados, virados em parcela cobrável</span>
+        <span class="pos">${brl(apropriado)}</span></div>
+      <div class="l"><span>Juros corridos até ${fmtBR(ate)} e ainda não reconhecidos</span>
+        <span class="${Math.abs(corridos) > .5 ? 'warntxt' : 'muted'}">${brl(corridos)}</span></div>
+      <div class="l tot"><span>Juros devidos hoje</span><span>${brl(apropriado + corridos)}</span></div>
+      <div class="conta">${acertado ? `Os juros estão acertados até <b>${fmtBR(acertado)}</b>: daí em diante o saldo volta a render.`
+      : 'Nenhuma apropriação feita ainda para este cliente: o juro corre desde o primeiro envio.'}
+        Apropriar transforma o que já correu numa parcela que vence na data do corte;
+        receber abate primeiro essa parcela, depois o juro do período e só então o principal.</div>
+    </div></div></div>`;
+}
 
 /* Onde a dívida está andando: quanto do que entrou pagou juros e quanto
    abateu de verdade. Cliente que só cobre a correção nunca diminui a dívida,
