@@ -381,6 +381,23 @@ tr.crmov{background:var(--raise)}
 tr.pisca{animation:piscada 1.6s ease-in-out 2}
 .crorig{font-size:10px;color:var(--mut);font-style:normal}
 .chip.clicavel{cursor:pointer}
+/* Grade da correção: mesma leitura da planilha, com a coluna do saldo puxando
+   o olho e o dia sem movimento quase apagado. */
+.crplan table{font-variant-numeric:tabular-nums}
+.crplan thead th{font-size:9.5px;letter-spacing:1.1px;white-space:nowrap}
+.crplan td{padding:5px 10px;font-size:12px}
+.crplan td.zero{color:var(--line-f)}
+.crplan tbody tr:not(.crmov) td{color:var(--dim)}
+.crplan tbody tr td:last-child{color:var(--txt)}
+.crplan tfoot td{border-top:1px solid var(--line);background:var(--panel2);padding:8px 10px;font-size:12px;
+  position:sticky;bottom:0}
+.crtaxa{font-size:11.5px;color:var(--mut)}
+.crtaxa b{color:var(--dim)}
+.crtag{display:inline-block;margin-left:7px;font-style:normal;font-size:9.5px;color:var(--mut);
+  border:1px solid var(--line-f);border-radius:4px;padding:0 5px;vertical-align:1px}
+.crtag.ok{color:var(--pos);border-color:color-mix(in srgb,var(--pos) 40%,transparent)}
+.crtag.link{color:var(--acc);border-color:color-mix(in srgb,var(--acc) 40%,transparent);cursor:pointer}
+.crtag.link:hover{background:color-mix(in srgb,var(--acc) 16%,transparent)}
 .chip.clicavel:hover{filter:brightness(1.35)}
 tr.crmov td{border-bottom-color:var(--line)}
 .agpe{font-size:11.5px;color:var(--mut);margin-top:8px;text-align:center}
@@ -1721,7 +1738,7 @@ const SECAO = {
   antecipacoes: ['Antecipações', 'Recurso enviado que ainda não voltou, com juros projetados'],
   captacoes: ['Captações', 'Recurso de terceiro no seu caixa — e o custo que ele gera'],
   recebidos: ['Recebidos', 'Títulos e antecipações já baixados'],
-  correcao: ['Correção', 'A planilha de correção dia a dia, com o saldo quebrado em principal e juros'],
+  correcao: ['Correção', 'A planilha de correção do recurso na rua, dia a dia, por cliente'],
   clientes: ['Por cliente', 'Quanto cada cliente deve hoje, e de que esse número é feito'],
   resultado: ['Resultado', 'Receitas e despesas por conta, com comparativo do período anterior'],
   projecao: ['Projeção de caixa', 'O que já está contratado, dia a dia, a partir do saldo de hoje'],
@@ -6009,7 +6026,7 @@ function extratoHTML(p) {
    pagamento que só cobre a correção do mês deixa o principal parado, e no
    saldo consolidado isso não aparece.
    ========================================================================= */
-let crCli = null, crAte = null, crGrao = 'MES', crSoMov = false;
+let crCli = null, crAte = null, crGrao = 'DIA', crSoMov = false, crQuebra = false;
 
 /* Correção é o controle do recurso na rua, e recurso na rua é antecipação.
    Título de cliente tem deságio e vencimento próprios: o dinheiro nunca foi
@@ -6143,6 +6160,7 @@ function crMuda(campo, v) {
   if (campo === 'ate') crAte = v;
   if (campo === 'grao') crGrao = v;
   if (campo === 'somov') crSoMov = v;
+  if (campo === 'quebra') crQuebra = v;
   render();
 }
 
@@ -6162,11 +6180,13 @@ VIEWS.correcao = function () {
     <label style="font-size:12.5px;color:var(--dim)">Corrigir até</label>
     <input type="date" value="${ate}" onchange="crMuda('ate', this.value)" style="max-width:150px">
     <div class="seg sm" style="margin:0">
-      <div class="o ${crGrao === 'MES' ? 'sel' : ''}" onclick="crMuda('grao','MES')">Por mês</div>
       <div class="o ${crGrao === 'DIA' ? 'sel' : ''}" onclick="crMuda('grao','DIA')">Dia a dia</div>
+      <div class="o ${crGrao === 'MES' ? 'sel' : ''}" onclick="crMuda('grao','MES')">Por mês</div>
     </div>
     <label style="font-size:12.5px;color:var(--dim)"><input type="checkbox" ${crSoMov ? 'checked' : ''}
       onchange="crMuda('somov', this.checked)"> só dias com movimento</label>
+    <label style="font-size:12.5px;color:var(--dim)"><input type="checkbox" ${crQuebra ? 'checked' : ''}
+      onchange="crMuda('quebra', this.checked)"> separar principal e juros</label>
     <button class="btn btn-sm" onclick="abrirAcerto()">⧗ Acertar juros</button>
     <button class="btn btn-sm right" onclick="abrirExtrato('${esc(crCli).replace(/'/g, "\\'")}')">Extrato</button></div>`;
 
@@ -6195,8 +6215,9 @@ VIEWS.correcao = function () {
       como <span class="chip chip-warn">abertura</span>.
       Todo o resto abre no razão com um clique.</div>` : '';
 
-  return filtros + stats + aviso + crAmortizacao(s) +
-    (crGrao === 'DIA' ? crTabelaDia(s) : crTabelaMes(s));
+  return filtros + stats +
+    (crGrao === 'DIA' ? crTabelaDia(s) : crTabelaMes(s)) +
+    crAmortizacao(s) + aviso;
 };
 
 /* Onde a dívida está andando: quanto do que entrou pagou juros e quanto
@@ -6239,54 +6260,87 @@ function crTabelaMes(s) {
     m.principal = l.principal; m.juros = l.juros; m.saldo = l.saldo;
   });
   const linhas = Object.values(g);
-  return `<div class="panel"><div class="panel-head"><h2>Correção mês a mês<small>o saldo de cada mês, no fechamento</small></h2></div>
-    <div class="tbl-scroll"><table><thead><tr>
-      <th>Mês</th><th class="num">Correção</th><th class="num">Enviado</th><th class="num">Recebido</th>
-      <th class="num">Abateu juros</th><th class="num">Abateu principal</th>
-      <th class="num">Principal</th><th class="num">Juros</th><th class="num">Saldo</th></tr></thead>
+  const q = crQuebra;
+  const cel = (v, cls) => v > .005 ? `<td class="num ${cls || ''}">${brl(v)}</td>` : `<td class="num zero">—</td>`;
+  return `<div class="panel"><div class="panel-head">
+      <h2>Correção mês a mês<small>o fechamento de cada mês</small></h2>
+      <div class="crtaxa">taxa <b>${fmtTaxa(s.taxa)}%</b> ao mês</div></div>
+    <div class="tbl-scroll crplan"><table><thead><tr>
+      <th>MÊS</th><th class="num">CORREÇÃO</th><th class="num">C</th><th class="num">D</th>
+      ${q ? '<th class="num">PRINCIPAL</th><th class="num">JUROS</th>' : ''}
+      <th class="num">SALDO</th></tr></thead>
     <tbody>${linhas.map(m => `<tr>
-      <td>${esc(mesLabel(m.mes))}${m.n ? ` <span class="chip chip-n">${m.n} mov</span>` : ''}</td>
-      <td class="num pos">${m.correcao > .005 ? brl(m.correcao) : '—'}</td>
-      <td class="num">${m.debito > .005 ? brl(m.debito) : '<span class="muted">—</span>'}</td>
-      <td class="num">${m.credito > .005 ? brl(m.credito) : '<span class="muted">—</span>'}</td>
-      <td class="num muted">${m.abateJuros > .005 ? brl(m.abateJuros) : '—'}</td>
-      <td class="num">${m.abatePrincipal > .005 ? brl(m.abatePrincipal) : '<span class="muted">—</span>'}</td>
-      <td class="num">${brl(m.principal)}</td>
-      <td class="num pos">${brl(m.juros)}</td>
+      <td>${esc(mesLabel(m.mes))}${m.n ? `<i class="crtag">${m.n} mov</i>` : ''}</td>
+      ${cel(m.correcao, 'pos')}${cel(m.credito)}${cel(m.debito)}
+      ${q ? cel(m.principal) + cel(m.juros, 'pos') : ''}
       <td class="num"><b>${brl(m.saldo)}</b></td></tr>`).join('')}
-    </tbody></table></div>
-    <div class="agpe">${linhas.length} mês(es) desde ${fmtBR(s.inicio)}. Clique em "Dia a dia" para ver linha por linha, como na planilha.</div></div>`;
+    </tbody>
+    <tfoot><tr><td><b>Até ${fmtBR(s.fim)}</b></td>
+      <td class="num pos"><b>${brl(s.corrigido)}</b></td>
+      <td class="num"><b>${brl(s.recebido)}</b></td>
+      <td class="num"><b>${brl(s.enviado)}</b></td>
+      ${q ? `<td class="num"><b>${brl(s.principal)}</b></td><td class="num pos"><b>${brl(s.juros)}</b></td>` : ''}
+      <td class="num"><b>${brl(s.saldo)}</b></td></tr></tfoot></table></div>
+    <div class="agpe">${linhas.length} mês(es) desde ${fmtBR(s.inicio)}. Em "Dia a dia" a grade fica igual à da planilha.</div></div>`;
 }
 
 function crTabelaDia(s) {
   const linhas = crSoMov ? s.linhas.filter(l => l.eventos.length) : s.linhas;
-  const corte = 700;
+  const corte = 800;
   const mostra = linhas.slice(-corte);
-  return `<div class="panel"><div class="panel-head"><h2>Correção dia a dia<small>uma linha por dia: o saldo de ontem rende hoje</small></h2></div>
-    <div class="tbl-scroll" style="max-height:62vh"><table><thead><tr>
-      <th>Data</th><th class="num">Correção</th><th class="num">Enviado</th><th class="num">Recebido</th>
-      <th class="num">Principal</th><th class="num">Juros</th><th class="num">Saldo</th><th>Movimento</th></tr></thead>
-    <tbody>${mostra.map(l => `<tr class="${l.eventos.length ? 'crmov' : ''}">
-      <td>${fmtBR(l.data)}</td>
-      <td class="num pos">${l.correcao > .005 ? brl(l.correcao) : '<span class="muted">—</span>'}</td>
-      <td class="num">${l.debito > .005 ? brl(l.debito) : '<span class="muted">—</span>'}</td>
-      <td class="num">${l.credito > .005 ? brl(l.credito) : '<span class="muted">—</span>'}</td>
-      <td class="num">${brl(l.principal)}</td>
-      <td class="num pos">${brl(l.juros)}</td>
-      <td class="num"><b>${brl(l.saldo)}</b></td>
-      <td style="font-size:11px">${l.eventos.map(e => e.apropriado
-      ? `<span class="chip chip-ok">apropriado ${brl(e.apropriado)}</span>`
-      : e.movId
-        ? `<span class="chip ${e.debito ? 'chip-n' : 'chip-ok'} clicavel" title="Abrir no razão"
-             onclick="crAbrirMov('${e.movId}')">${esc(e.rotulo)} ↗</span>`
-        : `<span class="chip ${e.debito ? 'chip-n' : 'chip-ok'}">${esc(e.rotulo)}</span>
-           <span class="chip chip-warn" title="Sem lançamento no razão: veio da abertura">abertura</span>`).join(' ')}
-        ${l.abateJuros > .005 ? `<i class="muted" style="font-style:normal">abateu ${brl(l.abateJuros)} de juros${l.abatePrincipal > .005 ? ` e ${brl(l.abatePrincipal)} de principal` : ''}</i>` : ''}</td></tr>`).join('')}
-    </tbody></table></div>
-    <div class="agpe">${linhas.length > corte ? `Mostrando os últimos ${corte} de ${linhas.length} dias. ` : ''}
-      Mesma conta da planilha de correção: saldo de ontem × ${fmtTaxa(s.taxa)}% ÷ 30, composto dia a dia.</div></div>`;
-}
+  const q = crQuebra;
 
+  // Mesma ordem e os mesmos nomes de coluna da planilha de correção: a data,
+  // o que o dia rendeu, o crédito, o débito e o saldo. Principal e juros
+  // ficam fora por padrão porque não existem lá — entram por opção, quando a
+  // pergunta deixa de ser "quanto ele deve" e passa a ser "o que a dívida
+  // está fazendo".
+  const cab = `<tr>
+    <th>DATA</th><th class="num">CORREÇÃO</th>
+    <th class="num" title="Crédito: o que o cliente pagou">C</th>
+    <th class="num" title="Débito: o que foi enviado">D</th>
+    ${q ? '<th class="num">PRINCIPAL</th><th class="num">JUROS</th>' : ''}
+    <th class="num">SALDO</th></tr>`;
+
+  const cel = (v, cls) => v > .005
+    ? `<td class="num ${cls || ''}">${brl(v)}</td>`
+    : `<td class="num zero">—</td>`;
+
+  const corpo = mostra.map(l => {
+    // o crédito e o débito do dia levam ao lançamento que os originou
+    const alvo = l.eventos.find(e => e.movId);
+    const marca = l.eventos.length
+      ? l.eventos.map(e => e.apropriado
+        ? `<i class="crtag ok" title="Juros apropriados neste dia">apropriado ${brl(e.apropriado)}</i>`
+        : e.movId
+          ? `<i class="crtag link" title="Abrir no razão" onclick="crAbrirMov('${e.movId}')">${esc(e.rotulo)} ↗</i>`
+          : `<i class="crtag" title="Veio da abertura: sem lançamento no razão">${esc(e.rotulo)} · abertura</i>`).join('')
+      : '';
+    return `<tr class="${l.eventos.length ? 'crmov' : ''}">
+      <td>${fmtBR(l.data)}${marca}</td>
+      ${cel(l.correcao, 'pos')}
+      ${cel(l.credito)}
+      ${cel(l.debito)}
+      ${q ? cel(l.principal) + cel(l.juros, 'pos') : ''}
+      <td class="num"><b>${brl(l.saldo)}</b></td></tr>`;
+  }).join('');
+
+  return `<div class="panel"><div class="panel-head">
+      <h2>Correção<small>uma linha por dia, o saldo de ontem rendendo hoje</small></h2>
+      <div class="crtaxa">taxa <b>${fmtTaxa(s.taxa)}%</b> ao mês · ÷ 30 por dia</div></div>
+    <div class="tbl-scroll crplan" style="max-height:66vh"><table><thead>${cab}</thead>
+      <tbody>${corpo}</tbody>
+      <tfoot><tr>
+        <td><b>Até ${fmtBR(s.fim)}</b></td>
+        <td class="num pos"><b>${brl(s.corrigido)}</b></td>
+        <td class="num"><b>${brl(s.recebido)}</b></td>
+        <td class="num"><b>${brl(s.enviado)}</b></td>
+        ${q ? `<td class="num"><b>${brl(s.principal)}</b></td><td class="num pos"><b>${brl(s.juros)}</b></td>` : ''}
+        <td class="num"><b>${brl(s.saldo)}</b></td></tr></tfoot></table></div>
+    <div class="agpe">${linhas.length > corte ? `Mostrando os últimos ${corte} de ${linhas.length} dias. ` : `${linhas.length} dia(s) desde ${fmtBR(s.inicio)}. `}
+      <b>C</b> é o que o cliente pagou e <b>D</b> o que foi enviado, como na planilha.
+      A correção de cada dia é o saldo do dia anterior × ${fmtTaxa(s.taxa)}% ÷ 30.</div></div>`;
+}
 
 /* ---------- Acerto de juros ----------
    Duas coisas que a conta não decide sozinha: perdoar o juro que correu e
