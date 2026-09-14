@@ -1027,12 +1027,23 @@ tr.crmov td{border-bottom-color:var(--line)}
     <button class="btn btn-gold" onclick="salvarParcPgto()">Registrar pagamento</button></div>
 </div></div>
 
+<!-- ===================== Conferência de um cliente ===================== -->
+<div class="overlay" id="ovConferencia"><div class="modal wide">
+  <div class="modal-head"><h3 id="cfTit">Conferência</h3><button class="modal-x" onclick="closeModal('ovConferencia')">×</button></div>
+  <div class="modal-body" id="cfCorpo"></div>
+  <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal('ovConferencia')">Fechar</button></div>
+</div></div>
+
 <!-- ===================== Cliente ===================== -->
 <div class="overlay" id="ovCliente"><div class="modal">
   <div class="modal-head"><h3 id="clTit">Novo cliente</h3><button class="modal-x" onclick="closeModal('ovCliente')">×</button></div>
   <div class="modal-body">
     <input type="hidden" id="cl_id">
     <div class="field"><label>Nome / razão social *</label><input id="cl_nome"></div>
+    <div class="field"><label>Taxa de antecipação deste cliente (% ao mês)</label>
+      <input type="number" step="0.01" min="0" id="cl_taxa" placeholder="em branco usa a taxa padrão">
+      <div class="hint">Deixe em branco para usar a taxa padrão. <b>Zero é um valor válido</b>:
+        é o caso de quem recebe recurso sem juros, só para ser ajudado.</div></div>
     <div class="fgrid">
       <div class="field"><label>CNPJ ou CPF</label><input id="cl_doc" oninput="docInput('cl_doc','cl_docHint')" placeholder="00.000.000/0000-00">
         <div class="hint" id="cl_docHint"></div></div>
@@ -1574,7 +1585,16 @@ function razaoDoMes(mk, fs) {
    juros = valor × (taxa/100) ÷ 30 × dias corridos. Trocar isso muda o valor
    em reais, então mora num lugar só e todo mundo chama daqui. ===== */
 const taxaPadrao = () => (typeof DB.config.taxaAntecipacao === 'number' && isFinite(DB.config.taxaAntecipacao)) ? DB.config.taxaAntecipacao : 4;
-const taxaDa = t => (t && typeof t.taxaMensal === 'number' && isFinite(t.taxaMensal)) ? t.taxaMensal : taxaPadrao();
+/* A taxa vem do título; sem ela, da ficha do cliente; sem ela, do padrão.
+   Em qualquer um dos dois níveis, zero é um valor legítimo: há cliente que
+   recebe recurso sem juros, só para ser ajudado, e isso precisa sobreviver a
+   uma mudança na taxa padrão. */
+const taxaDa = t => {
+  if (t && typeof t.taxaMensal === 'number' && isFinite(t.taxaMensal)) return t.taxaMensal;
+  const c = t && t.cliente ? (DB.clientes || []).find(x => x.nome === t.cliente && !x.deletedAt) : null;
+  if (c && typeof c.taxaMensal === 'number' && isFinite(c.taxaMensal)) return c.taxaMensal;
+  return taxaPadrao();
+};
 /* ===== Juros compostos dia a dia =====
    É o modelo das planilhas de correção: o saldo de ontem rende hoje, e o juro
    de hoje passa a render amanhã. A taxa mensal vira taxa diária dividida por
@@ -1846,6 +1866,7 @@ const IC = {
   acesso: '<circle cx="12" cy="8" r="3.4"/><path d="M5.5 20c0-3.4 2.9-5.6 6.5-5.6s6.5 2.2 6.5 5.6"/>',
   lixeira: '<path d="M3.5 6h17M8.5 6V3.6h7V6M6.4 6v14.4h11.2V6"/>',
   historico: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  conferencia: '<path d="M4 7h10M4 12h7M4 17h5"/><path d="M14 15l2.5 2.5L21 13"/>',
   carteira: '<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M7 3v3M17 3v3"/><circle cx="16.5" cy="14.5" r="1.4"/>',
   correcao: '<path d="M4 19V5M4 19h16"/><path d="M7 16l3.5-4 3 2.5L20 7"/><circle cx="20" cy="7" r="1.3"/>',
   clientes: '<circle cx="8" cy="8" r="3.2"/><path d="M2.5 20c0-3.2 2.5-5.2 5.5-5.2s5.5 2 5.5 5.2"/><path d="M16 5.5a3 3 0 010 5.6M18 14.6c2 .7 3.5 2.5 3.5 5.4"/>'
@@ -1868,7 +1889,7 @@ const NAV = [
   { g: 'Gestão', its: [['clientes', 'Clientes'], ['correcao', 'Correção'], ['resultado', 'Resultado'],
                        ['projecao', 'Fluxo de caixa'], ['contas', 'Parcelas bancárias']] },
   { g: 'Administração', its: [['fechamento', 'Fechamento'], ['cadastros', 'Fontes e taxas'],
-                              ['plano', 'Plano de contas'], ['historico', 'Histórico'],
+                              ['plano', 'Plano de contas'], ['conferencia', 'Conferência'], ['historico', 'Histórico'],
                               ...(MODO_NUVEM ? [['acesso', 'Usuários'] ] : []), ['lixeira', 'Lixeira']] }
 ];
 const SECAO = {
@@ -1886,6 +1907,7 @@ const SECAO = {
   fechamento: ['Fechamento', 'Mês conferido vira mês travado — e reabrir é um clique'],
   contas: ['Parcelas bancárias', 'Parcelas dos contratos de capital de giro tomado no banco'],
   cadastros: ['Fontes e taxas', 'Contas de origem, taxas padrão e regime de juros'],
+  conferencia: ['Conferência', 'Se o que saiu menos o que voltou bate com o que está em aberto'],
   historico: ['Histórico', 'O que mudou, quando, por quem, e de qual valor para qual'],
   plano: ['Plano de contas', 'A conta define o grupo e o serviço de todo o histórico'],
   acesso: ['Acesso', 'Sua conta, seus dados e — se você for administrador — quem entra'],
@@ -3800,6 +3822,7 @@ function abrirCliente(id) {
   el('clTit').textContent = c ? 'Editar cliente' : 'Novo cliente';
   setVal('cl_id', c ? c.id : '');
   preenchePessoa('cl', c);
+  setVal('cl_taxa', c && typeof c.taxaMensal === 'number' ? c.taxaMensal : '');
   clCor = c && Number.isInteger(c.cor_idx) ? c.cor_idx : clientes().length % PALETA.length;
   pintaCores();
   openModal('ovCliente'); setTimeout(() => el('cl_nome').focus(), 60);
@@ -3808,6 +3831,14 @@ function salvarCliente() {
   limpaErro('cl_erro');
   const dados = leParaPessoa('cl');
   if (!dados.nome) return erro('cl_erro', 'Informe o nome.');
+  // Zero é escolha, vazio é ausência de escolha: um cliente que recebe recurso
+  // sem juros precisa poder dizer zero sem que o sistema entenda "não informou"
+  // e volte a aplicar a taxa padrão.
+  const bruto = val('cl_taxa').trim();
+  const taxa = bruto === '' ? null : num(bruto);
+  if (bruto !== '' && !(taxa >= 0))
+    return erro('cl_erro', 'A taxa precisa ser um número maior ou igual a zero.');
+  dados.taxaMensal = taxa;
   const id = val('cl_id');
   if (DB.clientes.some(x => x.id !== id && !x.deletedAt && x.nome.toLowerCase() === dados.nome.toLowerCase()))
     return erro('cl_erro', 'Já existe um cliente com esse nome.');
@@ -7511,6 +7542,239 @@ function histVal(v) {
 function histBuscar(v) { histFiltro = v; render(); }
 
 /* =========================================================================
+   Conferência
+   Duas fontes contam a mesma história e precisam concordar: os títulos, que
+   dizem quanto está em aberto, e o razão, que diz quanto dinheiro saiu e
+   voltou. Quando discordam, um dos dois está errado — e descobrir qual, seis
+   meses depois, é trabalho de arqueologia.
+
+   Os lançamentos que vieram da planilha não apontam para o título que
+   originaram. O dinheiro está certo e o título está certo, mas ninguém sabe
+   qual entrada pagou qual antecipação. Esta tela casa os dois por cliente,
+   data e valor, e deixa confirmar a associação: isso não muda número nenhum,
+   só amarra o que já existe.
+   ========================================================================= */
+
+const CONF_TOLER = 0.02;
+
+/* O que o razão diz sobre um cliente, e o que os títulos dizem. */
+function confCliente(nome, fs) {
+  const fontes = fs || fontesDoFiltro();
+  const ant = tits().filter(t => t.tipo === 'ANTECIPACAO' && t.cliente === nome && fontes.includes(t.fonte));
+  const abertas = ant.filter(emAberto);
+  const envios = movs().filter(m => m.tipo === 'ANTECIPACAO_ENVIO' && m.cliente === nome
+    && fontes.includes(m.fonte) && (m.saida || 0) > 0);
+  // Entrada de dinheiro do cliente pode ser devolução de antecipação ou
+  // recebimento de NF, e nos lançamentos que vieram da planilha o tipo não
+  // distingue. Vale como devolução o que casa com alguma antecipação dele:
+  // um recebimento de NF de 11.561,33 não casa com nenhuma.
+  const voltas = movs().filter(m => m.cliente === nome && fontes.includes(m.fonte)
+    && (m.entrada || 0) > 0 && ['ANTECIPACAO_RETORNO', 'RECEBIMENTO'].includes(m.tipo)
+    && (m.tituloId
+      ? (tits().find(t => t.id === m.tituloId) || {}).tipo === 'ANTECIPACAO'
+      : ant.some(t => casa(m, t))));
+
+  const saiu = +envios.reduce((s, m) => s + m.saida, 0).toFixed(2);
+  const voltou = +voltas.reduce((s, m) => s + m.entrada, 0).toFixed(2);
+  const emAbertoTit = +abertas.reduce((s, t) => s + (t.valor || 0), 0).toFixed(2);
+  // antecipação que veio da planilha não tem envio no razão: o efeito de caixa
+  // já estava no saldo inicial, então ela entra aqui pelo valor de origem
+  const semEnvio = ant.filter(t => !envios.some(m => casa(m, t)));
+  const aberturaSemRazao = +semEnvio.reduce((s, t) => s + valorOrigem(t), 0).toFixed(2);
+
+  const saldoRazao = +(saiu + aberturaSemRazao - voltou).toFixed(2);
+  const dif = +(saldoRazao - emAbertoTit).toFixed(2);
+
+  return {
+    nome, ant, abertas, envios, voltas, saiu, voltou, emAbertoTit,
+    semEnvio, aberturaSemRazao, saldoRazao, dif,
+    bate: Math.abs(dif) < CONF_TOLER,
+    orfaos: envios.concat(voltas).filter(m => !m.tituloId)
+  };
+}
+
+/* Um lançamento casa com um título quando fala do mesmo cliente e do mesmo
+   valor. A data entra como desempate, não como exigência: nos dados que
+   vieram da planilha ela às vezes difere do título — o envio do CAIXA
+   FINANCIAMENTO está um mês à frente da data da antecipação. Exigir data
+   igual faria o sistema contar o mesmo dinheiro duas vezes, que é pior do que
+   casar por valor. Não é prova, é indício forte o bastante para sugerir; a
+   confirmação é de quem conhece a operação. */
+function casa(m, t) {
+  if (m.tituloId) return m.tituloId === t.id;
+  if (m.cliente !== t.cliente || t.tipo !== 'ANTECIPACAO') return false;
+  const v = m.saida || m.entrada || 0;
+  const alvo = m.tipo === 'ANTECIPACAO_ENVIO'
+    ? valorOrigem(t)
+    : (t.status === 'PAGO' ? (t.valorRecebido || t.valor || 0) : (t.valor || 0));
+  return Math.abs(v - alvo) < CONF_TOLER;
+}
+/* Quando mais de um título casa pelo valor, a data desempata. */
+function melhorCandidato(m, cands) {
+  if (cands.length <= 1) return cands[0] || null;
+  const exata = cands.find(t => m.data === t.dataEntrada);
+  if (exata) return exata;
+  return cands.slice().sort((a, b) =>
+    Math.abs(diasEntre(a.dataEntrada, m.data)) - Math.abs(diasEntre(b.dataEntrada, m.data)))[0];
+}
+/* Quanto a antecipação valia quando saiu, antes de amortizações e juros.
+   A baixa total não zera o valor do título — ela só troca o status —, então
+   somar o valor recebido aqui contaria o mesmo dinheiro duas vezes. */
+function valorOrigem(t) {
+  const amort = parciaisDe(t.id).reduce((a, m) => a + (m.amortizado || 0), 0);
+  return +((t.valor || 0) + amort - (t.jurosSomados || 0)).toFixed(2);
+}
+
+/* Sugestões de associação: lançamento órfão que casa com um título só. */
+function confSugestoes(fs) {
+  const fontes = fs || fontesDoFiltro();
+  const ant = tits().filter(t => t.tipo === 'ANTECIPACAO' && fontes.includes(t.fonte));
+  const orfaos = movs().filter(m => !m.tituloId && fontes.includes(m.fonte)
+    && ['ANTECIPACAO_ENVIO', 'ANTECIPACAO_RETORNO'].includes(m.tipo));
+  const usados = new Set();
+  const sug = [];
+  orfaos.forEach(m => {
+    const cand = ant.filter(t => !usados.has(t.id) && casa(m, t));
+    const alvo = melhorCandidato(m, cand);
+    if (alvo) { usados.add(alvo.id); sug.push({ mov: m, titulo: alvo, exata: cand.length === 1 }); }
+  });
+  return sug;
+}
+
+VIEWS.conferencia = function () {
+  const fs = fontesDoFiltro();
+  const nomes = [...new Set(tits().filter(t => t.tipo === 'ANTECIPACAO' && fs.includes(t.fonte))
+    .map(t => t.cliente).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  const linhas = nomes.map(n => confCliente(n, fs));
+  const fora = linhas.filter(x => !x.bate);
+  const sug = confSugestoes(fs);
+  const semAmarra = movs().filter(m => !m.tituloId && fs.includes(m.fonte)
+    && ['ANTECIPACAO_ENVIO', 'ANTECIPACAO_RETORNO'].includes(m.tipo)).length;
+
+  const stats = `<div class="stats">
+    <div class="stat"><div class="k">Clientes conferidos</div><div class="v">${linhas.length}</div>
+      <div class="sub">com antecipação registrada</div></div>
+    <div class="stat"><div class="k">Divergências</div><div class="v ${fora.length ? 'neg' : 'pos'}">${fora.length}</div>
+      <div class="sub">${fora.length ? 'razão e títulos discordam' : 'razão e títulos concordam'}</div></div>
+    <div class="stat"><div class="k">Lançamentos sem título</div><div class="v ${semAmarra ? 'warntxt' : 'pos'}">${semAmarra}</div>
+      <div class="sub">não dá para saber o que pagou o quê</div></div>
+    <div class="stat"><div class="k">Associações sugeridas</div><div class="v ${sug.length ? 'goldtxt' : ''}">${sug.length}</div>
+      <div class="sub">casam por cliente, data e valor</div></div>
+  </div>`;
+
+  const aviso = sug.length ? `<div class="alert">
+      <b>${sug.length} lançamento(s) podem ser amarrados ao título que originaram.</b>
+      <button class="btn btn-sm right" onclick="confAssociarTodos()">Associar todos</button>
+      Isso não muda valor nenhum: só registra qual envio virou qual antecipação e qual entrada a quitou.
+      A partir daí o extrato do cliente abre cada movimento no razão.</div>` : '';
+
+  const corpo = linhas.map(c => `<tr class="${c.bate ? '' : 'crmov'}">
+      <td>${cliTag(c.nome)}</td>
+      <td class="num">${brl(c.saiu + c.aberturaSemRazao)}${c.aberturaSemRazao > .005
+      ? `<div class="crtag">${brl(c.aberturaSemRazao)} de abertura</div>` : ''}</td>
+      <td class="num">${brl(c.voltou)}</td>
+      <td class="num"><b>${brl(c.saldoRazao)}</b></td>
+      <td class="num">${brl(c.emAbertoTit)}</td>
+      <td class="num ${c.bate ? 'pos' : 'neg'}"><b>${c.bate ? 'bate' : brl(c.dif)}</b></td>
+      <td class="num muted">${c.abertas.length}</td>
+      <td><div class="acoes">
+        <button class="btn btn-sm" onclick="confDetalhe('${esc(c.nome).replace(/'/g, "\\'")}')">Conferir</button>
+      </div></td></tr>`).join('');
+
+  return stats + aviso +
+    `<div class="filters">${segFonte()}</div>
+     <div class="panel"><div class="panel-head">
+       <h2>Antecipações: razão × títulos<small>o que saiu menos o que voltou tem que ser o que está em aberto</small></h2></div>
+      <div class="tbl-scroll crplan"><table><thead><tr>
+        <th>Cliente</th><th class="num">Saiu</th><th class="num">Voltou</th>
+        <th class="num">Saldo pelo razão</th><th class="num">Em aberto nos títulos</th>
+        <th class="num">Diferença</th><th class="num">Abertas</th><th></th></tr></thead>
+      <tbody>${corpo || `<tr><td colspan="8"><div class="empty">Nenhuma antecipação registrada.</div></td></tr>`}</tbody></table></div>
+      <div class="agpe">A coluna de abertura é a antecipação que veio da planilha, sem lançamento de envio:
+        o dinheiro saiu antes do sistema existir e o efeito já está no saldo inicial da fonte.</div></div>`;
+};
+
+/* O detalhe de um cliente: título a título, o que o razão tem para cada um. */
+function confDetalhe(nome) {
+  const c = confCliente(nome);
+  el('cfTit').textContent = `Conferência — ${nome}`;
+  const linha = t => {
+    const envio = c.envios.find(m => m.tituloId === t.id) || c.envios.find(m => casa(m, t));
+    const recs = c.voltas.filter(m => m.tituloId === t.id);
+    const recebido = +recs.reduce((s, m) => s + m.entrada, 0).toFixed(2);
+    const aberto = emAberto(t);
+    const esperado = aberto ? 0 : (t.valorRecebido || 0);
+    const falta = +(esperado - recebido).toFixed(2);
+    return `<tr>
+      <td>${numAntLabel(t.numAntecipacao)}</td>
+      <td>${fmtBR(t.dataEntrada)}</td>
+      <td class="num">${brl(valorOrigem(t))}</td>
+      <td>${envio ? `<span class="crtag link" onclick="crAbrirMov('${envio.id}')">no razão ↗</span>`
+      : '<span class="crtag">abertura</span>'}</td>
+      <td class="num">${recebido ? brl(recebido) : '<span class="zero">—</span>'}</td>
+      <td><span class="chip ${aberto ? (statusCalc(t) === 'VENCIDO' ? 'chip-bad' : 'chip-n') : 'chip-ok'}">${STATUS_LABEL[statusCalc(t)]}</span></td>
+      <td class="num ${Math.abs(falta) > CONF_TOLER ? 'neg' : 'muted'}">${Math.abs(falta) > CONF_TOLER ? brl(falta) : '—'}</td>
+    </tr>`;
+  };
+
+  const orfaos = c.orfaos.length ? `<div class="panel" style="margin-top:12px"><div class="panel-head">
+      <h2 style="font-size:13px">Lançamentos sem título amarrado<small>o dinheiro está no razão, mas não se sabe a qual antecipação pertence</small></h2></div>
+    <div class="tbl-scroll"><table><thead><tr><th>Data</th><th>Descrição</th><th class="num">Valor</th><th></th></tr></thead>
+    <tbody>${c.orfaos.map(m => {
+      const cand = c.ant.filter(t => casa(m, t));
+      return `<tr><td>${fmtBR(m.data)}</td>
+        <td>${esc(m.descricao || '')} <span class="crtag">${m.saida ? 'saída' : 'entrada'}</span></td>
+        <td class="num">${brl(m.saida || m.entrada)}</td>
+        <td>${cand.length === 1
+          ? `<button class="btn btn-sm" onclick="confAssociar('${m.id}','${cand[0].id}')">Associar à ${esc(numAntLabel(cand[0].numAntecipacao))}</button>`
+          : `<span class="muted">${cand.length ? cand.length + ' candidatas' : 'sem candidata'}</span>`}</td></tr>`;
+    }).join('')}</tbody></table></div></div>` : '';
+
+  el('cfCorpo').innerHTML = `
+    <div class="memo show">
+      <div class="l"><span>Saiu para o cliente</span><span>${brl(c.saiu + c.aberturaSemRazao)}</span></div>
+      <div class="l"><span>Voltou do cliente</span><span class="pos">${brl(c.voltou)}</span></div>
+      <div class="l"><span>Saldo pelo razão</span><span><b>${brl(c.saldoRazao)}</b></span></div>
+      <div class="l tot"><span>Em aberto nos títulos</span><span><b>${brl(c.emAbertoTit)}</b></span></div>
+      <div class="conta">${c.bate
+      ? 'As duas contas concordam: o que saiu menos o que voltou é exatamente o que está em aberto.'
+      : `<b class="neg">Diferença de ${brl(c.dif)}.</b> ${c.dif > 0
+        ? 'O razão mostra mais dinheiro na rua do que os títulos: ou falta baixar uma antecipação que já voltou, ou sobra um envio lançado.'
+        : 'Os títulos mostram mais em aberto do que o razão: ou falta lançar a entrada de uma devolução, ou uma baixa foi registrada sem o dinheiro.'}`}</div>
+    </div>
+    <div class="tbl-scroll crplan" style="margin-top:12px"><table><thead><tr>
+      <th>Antecipação</th><th>Enviada</th><th class="num">Valor de origem</th><th>Envio</th>
+      <th class="num">Recebido no razão</th><th>Situação</th><th class="num">Falta</th></tr></thead>
+    <tbody>${c.ant.sort((a, b) => (a.dataEntrada || '').localeCompare(b.dataEntrada || '')).map(linha).join('')}</tbody></table></div>
+    ${orfaos}`;
+  openModal('ovConferencia');
+}
+
+/* Associar não muda valor: só diz qual lançamento pertence a qual título. */
+function confAssociar(movId, tituloId) {
+  const m = DB.movs.find(x => x.id === movId);
+  const t = DB.titulos.find(x => x.id === tituloId);
+  if (!m || !t) return;
+  m.tituloId = t.id;
+  save(); render();
+  toast(`Lançamento amarrado à ${numAntLabel(t.numAntecipacao)}`);
+}
+
+function confAssociarTodos() {
+  const sug = confSugestoes(fontesDoFiltro());
+  if (!sug.length) return toast('Nada a associar');
+  confirmar(`Amarrar <b>${sug.length}</b> lançamento(s) aos títulos que eles originaram?`
+    + `<br><br>Nenhum valor muda: isso só registra qual envio virou qual antecipação`
+    + ` e qual entrada a quitou, o que hoje se perde.`
+    + `<br><br>O casamento é por cliente, data e valor, e só foi sugerido onde existe uma única candidata.`,
+    () => {
+      sug.forEach(s => { s.mov.tituloId = s.titulo.id; });
+      save(); render();
+      toast(`${sug.length} lançamento(s) associados`);
+    }, 'Associar lançamentos');
+}
+
+/* =========================================================================
    Backup e gravação do arquivo
    ========================================================================= */
 function exportData() {
@@ -7589,7 +7853,7 @@ const ACOES_ESCRITA = [
   'excluirLanc', 'excluirOper', 'excluirAnt', 'excluirTitulo', 'excluirCliente',
   'excluirSacado', 'excluirConta', 'desfazerBaixa', 'desfazerParcial', 'desfazerPerda',
   'desfazerApropriacao', 'desfazerApropriacaoAntiga', 'desfazerRateio',
-  'rtCorrigir', 'rtCorrigirTodos', 'alternarFechamento',
+  'rtCorrigir', 'rtCorrigirTodos', 'confAssociar', 'confAssociarTodos', 'alternarFechamento',
   'cpPagar', 'cpDesfazer', 'salvarParcPgto',
   'restaurar', 'importData', 'apMarcar', 'apTaxaTodos'
 ];
