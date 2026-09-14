@@ -650,6 +650,7 @@ tr.crmov td{border-bottom-color:var(--line)}
         <option value="SAIDA">Saída (dinheiro saiu)</option></select></div>
       <div class="field"><label>Valor</label><input type="number" step="0.01" min="0.01" id="lc_valor" oninput="lcCaixa()"></div>
     </div>
+    <div id="lc_retorno"></div>
     <div class="field" id="lc_afetaWrap"><label>Isso afeta o resultado?</label>
       <div class="radios">
         <label><input type="radio" name="lc_afeta" value="TOTAL" checked onchange="lcAfeta()"> Sim, o valor inteiro é receita/despesa</label>
@@ -858,6 +859,13 @@ tr.crmov td{border-bottom-color:var(--line)}
   <div class="modal-head"><h3 id="exTit">Extrato</h3><button class="modal-x" onclick="closeModal('ovExtrato')">×</button></div>
   <div class="modal-body" id="exCorpo"></div>
   <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal('ovExtrato')">Fechar</button></div>
+</div></div>
+
+<!-- ===================== Revisão de retornos ===================== -->
+<div class="overlay" id="ovRetornos"><div class="modal wide">
+  <div class="modal-head"><h3>Retornos de antecipação a revisar</h3><button class="modal-x" onclick="closeModal('ovRetornos')">×</button></div>
+  <div class="modal-body" id="rtCorpo"></div>
+  <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal('ovRetornos')">Fechar</button></div>
 </div></div>
 
 <!-- ===================== Cliente ===================== -->
@@ -1558,6 +1566,37 @@ function checaDoc(v) {
   if (d.length === 14) return cnpjValido(d) ? { txt: 'CNPJ válido', ok: true } : { txt: 'CNPJ: dígitos não conferem', ok: false };
   return { txt: 'faltam dígitos (11 para CPF, 14 para CNPJ)', ok: false };
 }
+
+/* ===== Retorno de antecipação: só o juro é receita =====
+   Mandar 5.000 e receber 5.000 de volta não move o resultado: é o mesmo
+   dinheiro voltando para o bolso. Receber 6.000 gera 1.000 de receita, que é
+   o juro. O motor da baixa já lança só a diferença, mas um lançamento feito
+   à mão pode marcar "o valor inteiro é receita" e inflar o resultado pelo
+   principal. Esta verificação encontra esses casos. */
+const CHAVES_RETORNO = ['receita_retorno_antecipacao', 'despesa_retorno_antecipacao',
+  'patrimonial_antecipacao_retornada'];
+function ehRetornoAntecipacao(m) {
+  if (m.tipo === 'ANTECIPACAO_RETORNO') return true;
+  const c = contaPorId(m.contaId);
+  return !!(c && CHAVES_RETORNO.includes(c.chave));
+}
+/* O principal que voltou não é receita. Se o resultado lançado for o valor
+   cheio da entrada, o principal está contado como lucro. */
+function retornoInflado(m) {
+  if (!ehRetornoAntecipacao(m)) return null;
+  const entrada = m.entrada || 0, res = m.resultado || 0;
+  if (entrada <= 0 || res <= 0) return null;
+  if (Math.abs(res - entrada) > .005) return null;   // já é só a diferença
+  const t = m.tituloId ? DB.titulos.find(x => x.id === m.tituloId) : null;
+  // com título vinculado dá para saber o principal e, portanto, o juro certo
+  const principal = t ? (t.valorRecebido != null && t.status === 'PAGO'
+    ? +(entrada - (m.resultado || 0)).toFixed(2) : null) : null;
+  const jurosCerto = t && t.valor != null ? +(entrada - t.valor).toFixed(2) : null;
+  return { mov: m, entrada, res, titulo: t || null, jurosCerto, principal };
+}
+const retornosInflados = fs => movs()
+  .filter(m => !fs || fs.includes(m.fonte))
+  .map(retornoInflado).filter(Boolean);
 
 /* ===== Apropriação de juros =====
    Antecipação que fica meses na rua rende juros todo mês, mas o resultado só
@@ -2280,12 +2319,22 @@ VIEWS.resultado = function () {
       `<div class="o ${servFiltro === v ? 'sel' : ''}" onclick="setServ('${v}')">${rot}</div>`).join('')}</div>
   </div>`;
 
+  // Principal contado como lucro é o erro que mais distorce o resultado do
+  // giro, e é silencioso: o número fica bonito e ninguém desconfia.
+  const inflados = retornosInflados(fs).filter(x => mkAtual.includes(mesDe(x.mov.data)));
+  const somaInflada = +inflados.reduce((a, x) => a + x.entrada, 0).toFixed(2);
+  const avisoRetorno = inflados.length ? `<div class="alert bad">
+    <b>${inflados.length} retorno(s) de antecipação com o valor inteiro lançado como receita</b>,
+    somando ${brl(somaInflada)}. No retorno, só o juro é receita: o principal é o seu dinheiro voltando.
+    Do jeito que está, o resultado do período está inflado pelo principal.
+    <button class="btn btn-sm right" onclick="abrirRetornos()">Revisar</button></div>` : '';
+
   const aClassificar = (servFiltro === 'TODOS' && Math.abs(r.AMBOS.resultado) > .005)
     ? `<div class="alert"><b>${brl(r.AMBOS.resultado)}</b> está em contas marcadas como <b>Geral</b>: entra no total da empresa,
        mas não é atribuído a BPO nem a Capital de Giro.
        <button class="btn btn-sm right" onclick="go('plano')">Classificar no plano de contas</button></div>` : '';
 
-  return stats + filtros + aClassificar +
+  return stats + filtros + avisoRetorno + aClassificar +
     `<div class="serv">
       ${cardServico('BPO', 'BPO Financeiro', r.BPO, 'var(--meta)')}
       ${cardServico('GIRO', 'Capital de Giro', r.GIRO, 'var(--acc)')}
@@ -2824,8 +2873,26 @@ function lcCaixa() {
                     val('lc_data'), { trocaFonte: 'lcTrocaFonte', ignoraId: val('lc_id') || null });
 }
 function lcTrocaFonte(cod) { setVal('lc_fonte', cod); lcCaixa(); }
+/* Retorno de antecipação lançado à mão é onde o principal costuma virar
+   receita sem querer: a pessoa põe a entrada cheia e marca "o valor inteiro
+   é receita". O aviso aparece na hora de escolher a conta. */
+function lcAvisoRetorno(c) {
+  const box = el('lc_retorno'); if (!box) return;
+  const ehRet = c && CHAVES_RETORNO.includes(c.chave);
+  const afeta = document.querySelector('input[name=lc_afeta]:checked');
+  if (!ehRet) { box.innerHTML = ''; return; }
+  const cheio = afeta && afeta.value === 'TOTAL';
+  box.innerHTML = `<div class="alert ${cheio ? 'bad' : ''}">
+    <b>No retorno de antecipação, só o juro é receita.</b>
+    O principal que volta é o seu próprio dinheiro voltando: mandar ${brl(5000)} e receber ${brl(5000)}
+    não muda o resultado. Receber ${brl(6000)} gera ${brl(1000)} de receita.
+    ${cheio ? `Com <b>"o valor inteiro é receita"</b> marcado, o principal entra como lucro e o resultado fica inflado.
+      Marque <b>"só uma parte é receita"</b> e informe o juro.`
+      : 'Prefira registrar o retorno pelo botão <b>Retorno</b> na antecipação: lá o juro sai da conta sozinho.'}</div>`;
+}
 function lcAfeta() {
   const v = document.querySelector('input[name=lc_afeta]:checked').value;
+  lcAvisoRetorno(contaPorId(val('lc_conta')));
   el('lc_parcialWrap').style.display = v === 'PARCIAL' ? 'block' : 'none';
 }
 function lcServ(c) { lcServico = c; pintaServ(); }
@@ -2837,6 +2904,7 @@ function pintaServ() {
   document.querySelectorAll('#lc_serv .o').forEach(o => o.classList.toggle('sel', o.dataset.v === efetivo));
   // Transferência é neutra por definição: não há escolha de resultado a fazer.
   el('lc_afetaWrap').style.display = (c && c.chave === 'patrimonial_transferencia') ? 'none' : 'block';
+  lcAvisoRetorno(c);
   el('lc_servHint').textContent = !c ? 'Escolha a conta e o serviço vem sugerido dela.'
     : (lcServico && lcServico !== padrao)
       ? `A conta "${c.nome}" sugere ${SERV_NOME[padrao]} — este lançamento vai gravado como ${SERV_NOME[efetivo]}.`
@@ -6147,6 +6215,99 @@ function crTabelaDia(s) {
     </tbody></table></div>
     <div class="agpe">${linhas.length > corte ? `Mostrando os últimos ${corte} de ${linhas.length} dias. ` : ''}
       Mesma conta da planilha de correção: saldo de ontem × ${fmtTaxa(s.taxa)}% ÷ 30, composto dia a dia.</div></div>`;
+}
+
+/* =========================================================================
+   Revisão de retornos de antecipação
+   O principal que volta não é receita. Quando um retorno é lançado com o
+   valor cheio no resultado, o lucro do período incha pelo principal e nada
+   denuncia isso: o número fica bonito e a conciliação pode continuar
+   fechando. Esta tela mostra os casos e corrige os que dá para corrigir com
+   segurança.
+
+   Só é seguro corrigir quando o lançamento está amarrado a um título: aí o
+   principal é conhecido, e o juro é a diferença. Sem título, o valor que
+   voltou pode ser qualquer coisa, e chutar seria trocar um erro por outro.
+   ========================================================================= */
+function abrirRetornos() {
+  const lista = retornosInflados(fontesDoFiltro());
+  el('rtCorpo').innerHTML = rtHTML(lista);
+  openModal('ovRetornos');
+}
+
+function rtHTML(lista) {
+  if (!lista.length) return `<div class="empty">Nenhum retorno com o valor inteiro no resultado.</div>`;
+  const comTitulo = lista.filter(x => x.titulo);
+  const soma = +lista.reduce((s, x) => s + x.entrada, 0).toFixed(2);
+  const inflado = +lista.reduce((s, x) => s + (x.jurosCerto != null ? x.entrada - x.jurosCerto : x.entrada), 0).toFixed(2);
+
+  return `<div class="alert bad">
+      <b>${lista.length} retorno(s) somando ${brl(soma)} estão com o principal contado como receita.</b>
+      No retorno de antecipação só o juro é receita: o resto é o seu dinheiro voltando.
+      Pelo que dá para apurar, o resultado está inflado em <b>${brl(inflado)}</b>.
+    </div>
+    ${comTitulo.length ? `<div class="filters" style="margin:0 0 10px">
+      <button class="btn btn-gold" onclick="rtCorrigirTodos()">Corrigir os ${comTitulo.length} com título vinculado</button>
+      <span class="hint" style="margin:0">Os demais precisam de decisão: o sistema não sabe qual parte era principal.</span></div>` : ''}
+    <div class="tbl-scroll"><table><thead><tr>
+      <th>Data</th><th>Descrição</th><th class="num">Entrou</th><th class="num">Lançado como receita</th>
+      <th class="num">Juro correto</th><th class="num">Principal</th><th></th></tr></thead>
+    <tbody>${lista.map(x => `<tr>
+      <td>${fmtBR(x.mov.data)}</td>
+      <td>${esc(x.mov.descricao || 'sem descrição')}${x.mov.cliente ? `<div class="muted" style="font-size:10px">${esc(x.mov.cliente)}</div>` : ''}</td>
+      <td class="num">${brl(x.entrada)}</td>
+      <td class="num neg">${brl(x.res)}</td>
+      <td class="num ${x.jurosCerto != null ? 'pos' : 'muted'}">${x.jurosCerto != null ? brl(x.jurosCerto) : 'não dá para apurar'}</td>
+      <td class="num">${x.jurosCerto != null ? brl(x.entrada - x.jurosCerto) : '<span class="muted">—</span>'}</td>
+      <td><div class="acoes">
+        ${x.jurosCerto != null
+      ? `<button class="btn btn-sm" onclick="rtCorrigir('${x.mov.id}')">Corrigir</button>`
+      : `<button class="btn btn-sm" onclick="closeModal('ovRetornos');abrirLanc('${x.mov.id}')">Abrir</button>`}
+      </div></td></tr>`).join('')}
+    </tbody></table></div>
+    <div class="field"><div class="hint">Corrigir muda só o resultado do lançamento: o dinheiro que entrou no
+      caixa continua o mesmo, porque ele entrou de verdade. O que sai do lucro é o principal, que nunca foi lucro.
+      Se a conciliação estava fechando por causa desse erro, ela passa a acusar a diferença: aí o título correspondente
+      precisa voltar para "na rua", e o botão <b>Abrir</b> leva ao lançamento.</div></div>`;
+}
+
+function rtCorrigir(movId) {
+  const m = DB.movs.find(x => x.id === movId);
+  const x = m && retornoInflado(m);
+  if (!x || x.jurosCerto == null) return toast('Esse lançamento precisa de decisão manual');
+  if (bloqueadoPorFechamento(m.data)) return;
+  const principal = +(x.entrada - x.jurosCerto).toFixed(2);
+  confirmar(`Tirar <b>${brl(principal)}</b> de principal do resultado?`
+    + `<br><br>Entrou ${brl(x.entrada)} e está lançado como ${brl(x.res)} de receita.`
+    + ` O juro de verdade é <b>${brl(x.jurosCerto)}</b>, e o resto é o seu dinheiro voltando.`
+    + `<br><br>O caixa não muda: os ${brl(x.entrada)} entraram mesmo.`, () => {
+    rtAplicar(m, x.jurosCerto);
+    save(); render();
+    toast(`Resultado corrigido: ${brl(principal)} saíram do lucro`);
+  }, 'Corrigir retorno de antecipação');
+}
+
+function rtCorrigirTodos() {
+  const lista = retornosInflados(fontesDoFiltro()).filter(x => x.jurosCerto != null
+    && !bloqueadoPorFechamento(x.mov.data));
+  if (!lista.length) return toast('Nada a corrigir automaticamente');
+  const principal = +lista.reduce((s, x) => s + (x.entrada - x.jurosCerto), 0).toFixed(2);
+  confirmar(`Tirar <b>${brl(principal)}</b> de principal do resultado, em ${lista.length} lançamento(s)?`
+    + `<br><br>Em cada um, fica só o juro: a diferença entre o que voltou e o valor do título.`
+    + ` O caixa não muda.`, () => {
+    lista.forEach(x => rtAplicar(x.mov, x.jurosCerto));
+    save(); render();
+    toast(`${lista.length} retorno(s) corrigidos: ${brl(principal)} saíram do lucro`);
+  }, 'Corrigir retornos de antecipação');
+}
+
+/* A correção mexe só no resultado e na conta. A entrada de caixa fica, porque
+   o dinheiro entrou mesmo. */
+function rtAplicar(m, juros) {
+  m.resultado = Math.abs(juros) < .005 ? null : juros;
+  const conta = contaPorChave(chavePadrao('ANTECIPACAO_RETORNO', m.resultado));
+  m.contaId = conta ? conta.id : null;
+  m.obs = (m.obs ? m.obs + ' | ' : '') + 'Resultado corrigido: só o juro é receita';
 }
 
 /* =========================================================================
