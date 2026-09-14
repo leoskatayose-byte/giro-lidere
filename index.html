@@ -918,6 +918,24 @@ tr.crmov td{border-bottom-color:var(--line)}
     <button class="btn btn-gold" onclick="salvarAcerto()">Acertar</button></div>
 </div></div>
 
+<!-- ===================== Rateio de recebimento ===================== -->
+<div class="overlay" id="ovRateio"><div class="modal wide">
+  <div class="modal-head"><h3 id="raTit">Receber do cliente</h3><button class="modal-x" onclick="closeModal('ovRateio')">×</button></div>
+  <div class="modal-body">
+    <div class="alert">Um valor só, distribuído entre as antecipações do cliente na ordem da cobrança:
+      primeiro os juros, depois o principal, do mais antigo para o mais novo.</div>
+    <div class="fgrid">
+      <div class="field"><label>Data</label><input type="date" id="ra_data" onchange="raCalc()"></div>
+      <div class="field"><label>Valor que entrou</label><input type="number" step="0.01" min="0.01" id="ra_valor" oninput="raCalc()"></div>
+    </div>
+    <div id="ra_previa"></div>
+    <div class="field"><label>Observação</label><textarea id="ra_obs" rows="2"></textarea></div>
+    <div class="erro" id="ra_erro"></div>
+  </div>
+  <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal('ovRateio')">Cancelar</button>
+    <button class="btn btn-gold" onclick="salvarRateio()">Ratear e baixar</button></div>
+</div></div>
+
 <!-- ===================== Cliente ===================== -->
 <div class="overlay" id="ovCliente"><div class="modal">
   <div class="modal-head"><h3 id="clTit">Novo cliente</h3><button class="modal-x" onclick="closeModal('ovCliente')">×</button></div>
@@ -5914,7 +5932,10 @@ VIEWS.clientes = function () {
       <td class="num"><b>${brl(p.total)}</b></td>
       <td>${p.acertadoAte ? fmtBR(p.acertadoAte) : '<span class="muted">nunca</span>'}</td>
       <td class="num muted">${p.abertos.length}</td>
-      <td><button class="btn btn-sm" onclick="abrirExtrato('${esc(p.nome).replace(/'/g, "\\'")}')">Extrato</button></td>
+      <td><div class="acoes">
+        <button class="btn btn-sm btn-gold" title="Receber um valor e ratear entre as antecipações"
+          onclick="abrirRateio('${esc(p.nome).replace(/'/g, "\\'")}')">Receber</button>
+        <button class="btn btn-sm" onclick="abrirExtrato('${esc(p.nome).replace(/'/g, "\\'")}')">Extrato</button></div></td>
     </tr>`).join('');
 
   return stats + aviso +
@@ -6187,6 +6208,7 @@ VIEWS.correcao = function () {
       onchange="crMuda('somov', this.checked)"> só dias com movimento</label>
     <label style="font-size:12.5px;color:var(--dim)"><input type="checkbox" ${crQuebra ? 'checked' : ''}
       onchange="crMuda('quebra', this.checked)"> separar principal e juros</label>
+    <button class="btn btn-sm btn-gold" onclick="abrirRateio()">＋ Receber</button>
     <button class="btn btn-sm" onclick="abrirAcerto()">⧗ Acertar juros</button>
     <button class="btn btn-sm right" onclick="abrirExtrato('${esc(crCli).replace(/'/g, "\\'")}')">Extrato</button></div>`;
 
@@ -6588,6 +6610,249 @@ function rtAplicar(m, juros) {
   const conta = contaPorChave(chavePadrao('ANTECIPACAO_RETORNO', m.resultado));
   m.contaId = conta ? conta.id : null;
   m.obs = (m.obs ? m.obs + ' | ' : '') + 'Resultado corrigido: só o juro é receita';
+}
+
+/* =========================================================================
+   Recebimento do cliente, rateado entre as antecipações
+
+   Entrou 50 mil da LIKA. Ela tem onze antecipações na rua, cada uma com o seu
+   juro corrido. Abrir uma por uma e calcular quanto cabe em cada é trabalho
+   que a máquina faz melhor: a ordem de quitação é sempre a mesma, e é a que
+   ele usa na cobrança — primeiro os juros, depois o principal, do mais antigo
+   para o mais novo.
+
+   Três camadas, nesta ordem:
+     1. parcela de juros já apropriada (juro que virou título e já é receita)
+     2. juros corridos e ainda não reconhecidos (viram receita agora)
+     3. principal (é o dinheiro voltando, não mexe no resultado)
+
+   No razão sai uma linha por antecipação abatida, dizendo o que foi juro e o
+   que foi principal. Um lançamento só de 50 mil não diria de qual antecipação
+   saiu o abatimento, e é justamente isso que precisa ficar registrado.
+   ========================================================================= */
+let rtCli = null;
+
+/* O plano de rateio: quem recebe o quê, sem aplicar nada ainda. */
+function planoRateio(cliente, valor, data, fs) {
+  const fontes = fs || fontesDoFiltro();
+  const ate = data || hoje();
+  let resta = +(valor || 0).toFixed(2);
+
+  const abertas = tits().filter(t => t.cliente === cliente && fontes.includes(t.fonte)
+    && emAberto(t) && t.tipo === 'ANTECIPACAO')
+    .sort((a, b) => (a.dataEntrada || '').localeCompare(b.dataEntrada || ''));
+  const parcelas = tits().filter(t => t.cliente === cliente && fontes.includes(t.fonte)
+    && emAberto(t) && t.tipo === 'JUROS')
+    .sort((a, b) => (a.dataVenc || '').localeCompare(b.dataVenc || ''));
+
+  const itens = new Map();
+  const item = t => {
+    if (!itens.has(t.id)) itens.set(t.id, { t, deParcela: 0, deJuros: 0, dePrincipal: 0, jurosAte: null });
+    return itens.get(t.id);
+  };
+
+  // 1) o juro que já virou título vem primeiro: é o mais antigo dos direitos
+  parcelas.forEach(t => {
+    if (resta <= .005) return;
+    const v = Math.min(resta, t.valor || 0);
+    if (v <= .005) return;
+    item(t).deParcela = +v.toFixed(2);
+    resta = +(resta - v).toFixed(2);
+  });
+
+  // 2) juros corridos e ainda não reconhecidos, do mais antigo para o mais novo
+  const corridos = abertas.map(t => ({ t, ...jurosAApropriar(t, ate) }))
+    .filter(x => x.dias > 0 && x.efeito > .005);
+  corridos.forEach(x => {
+    if (resta <= .005) return;
+    const v = Math.min(resta, x.efeito);
+    if (v <= .005) return;
+    const it = item(x.t);
+    it.deJuros = +v.toFixed(2);
+    it.jurosCorridos = +x.efeito.toFixed(2);
+    it.dias = x.dias; it.taxa = x.taxa; it.desde = x.desde;
+    // o relógio só anda até onde o juro foi de fato pago
+    it.jurosAte = v >= x.efeito - .005 ? ate : null;
+    resta = +(resta - v).toFixed(2);
+  });
+
+  // 3) o principal, também do mais antigo para o mais novo
+  abertas.forEach(t => {
+    if (resta <= .005) return;
+    const v = Math.min(resta, t.valor || 0);
+    if (v <= .005) return;
+    item(t).dePrincipal = +v.toFixed(2);
+    resta = +(resta - v).toFixed(2);
+  });
+
+  const lista = [...itens.values()];
+  const soma = k => +lista.reduce((s, x) => s + x[k], 0).toFixed(2);
+  return {
+    cliente, data: ate, valor: +(valor || 0).toFixed(2), itens: lista,
+    totalParcela: soma('deParcela'), totalJuros: soma('deJuros'), totalPrincipal: soma('dePrincipal'),
+    sobra: +resta.toFixed(2),
+    devidoJuros: +parcelas.reduce((s, t) => s + (t.valor || 0), 0).toFixed(2)
+      + +corridos.reduce((s, x) => s + x.efeito, 0).toFixed(2),
+    devidoPrincipal: +abertas.reduce((s, t) => s + (t.valor || 0), 0).toFixed(2)
+  };
+}
+
+/* ---------- Tela ---------- */
+function abrirRateio(cliente) {
+  rtCli = cliente || crCli;
+  if (!rtCli) return toast('Escolha um cliente');
+  limpaErro('ra_erro');
+  el('raTit').textContent = `Receber de ${rtCli}`;
+  setVal('ra_data', hoje());
+  setVal('ra_valor', '');
+  setVal('ra_obs', '');
+  raCalc();
+  openModal('ovRateio');
+  setTimeout(() => el('ra_valor').focus(), 60);
+}
+
+/* O valor que zera tudo é o que o próprio rateio consegue distribuir: somar
+   juros e principal por fora daria um centavo de diferença de arredondamento,
+   e aí o botão de quitar deixaria sobra. */
+function raTotalDevido() {
+  const p = planoRateio(rtCli, 1e12, val('ra_data') || hoje());
+  return +(p.totalParcela + p.totalJuros + p.totalPrincipal).toFixed(2);
+}
+function raQuitar() { setVal('ra_valor', raTotalDevido().toFixed(2)); raCalc(); }
+
+function raCalc() {
+  const v = num(val('ra_valor')), data = val('ra_data') || hoje();
+  const p = planoRateio(rtCli, v, data);
+  const box = el('ra_previa');
+
+  if (!(v > 0)) {
+    box.innerHTML = `<div class="memo show">
+      <div class="l"><span>Juros devidos hoje</span><span class="pos">${brl(p.devidoJuros)}</span></div>
+      <div class="l"><span>Principal na rua</span><span>${brl(p.devidoPrincipal)}</span></div>
+      <div class="l tot"><span>Total devido</span><span>${brl(p.devidoJuros + p.devidoPrincipal)}</span></div>
+      <div class="conta">Informe quanto entrou e o sistema mostra de onde vai abater,
+        na ordem: parcela de juros, juros corridos e por último o principal.</div>
+      <div style="margin-top:8px"><button class="btn btn-sm" onclick="raQuitar()">Usar o total devido (${brl(raTotalDevido())})</button></div></div>`;
+    return;
+  }
+
+  const linha = x => {
+    const rot = x.t.tipo === 'JUROS' ? 'Parcela de juros' : numAntLabel(x.t.numAntecipacao);
+    const total = +(x.deParcela + x.deJuros + x.dePrincipal).toFixed(2);
+    const resta = +((x.t.valor || 0) - x.deParcela - x.dePrincipal).toFixed(2);
+    return `<tr>
+      <td>${esc(rot)}${x.t.tipo !== 'JUROS' ? `<i class="crtag">de ${fmtBR(x.t.dataEntrada)}</i>` : ''}</td>
+      <td class="num">${brl(x.t.valor)}</td>
+      <td class="num ${x.deParcela + x.deJuros > .005 ? 'pos' : 'zero'}">${x.deParcela + x.deJuros > .005 ? brl(x.deParcela + x.deJuros) : '—'}</td>
+      <td class="num ${x.dePrincipal > .005 ? '' : 'zero'}">${x.dePrincipal > .005 ? brl(x.dePrincipal) : '—'}</td>
+      <td class="num"><b>${brl(total)}</b></td>
+      <td class="num ${resta > .005 ? 'warntxt' : 'pos'}">${resta > .005 ? brl(resta) : 'quitada'}</td></tr>`;
+  };
+
+  box.innerHTML = `<div class="tbl-scroll crplan" style="max-height:34vh"><table><thead><tr>
+      <th>De onde abate</th><th class="num">Em aberto</th><th class="num">Juros</th>
+      <th class="num">Principal</th><th class="num">Abatido</th><th class="num">Fica</th></tr></thead>
+    <tbody>${p.itens.map(linha).join('') || `<tr><td colspan="6"><div class="empty">Nada em aberto para este cliente.</div></td></tr>`}</tbody>
+    <tfoot><tr><td><b>Total</b></td><td class="num"></td>
+      <td class="num pos"><b>${brl(p.totalParcela + p.totalJuros)}</b></td>
+      <td class="num"><b>${brl(p.totalPrincipal)}</b></td>
+      <td class="num"><b>${brl(p.valor - p.sobra)}</b></td>
+      <td class="num"></td></tr></tfoot></table></div>
+    <div class="memo show">
+      <div class="l"><span>Entra no caixa</span><span>${brl(p.valor)}</span></div>
+      <div class="l"><span>Abate juros já reconhecidos</span><span>${brl(p.totalParcela)}</span></div>
+      <div class="l"><span>Reconhece juros corridos</span><span class="pos">${brl(p.totalJuros)}</span></div>
+      <div class="l"><span>Abate principal</span><span>${brl(p.totalPrincipal)}</span></div>
+      <div class="l tot"><span>Efeito no resultado</span><span class="pos">${brl(p.totalJuros)}</span></div>
+      <div class="conta">${p.sobra > .005
+      ? `<b class="neg">Sobram ${brl(p.sobra)}</b>: o cliente pagou mais do que as antecipações dele somam.
+         O total devido é ${brl(raTotalDevido())} — o que passar disso precisa ser lançado por fora,
+         porque título de cliente não entra neste rateio.`
+      : `Só o juro corrido entra como receita. A parcela já reconhecida e o principal não passam pelo resultado,
+         porque um já foi receita antes e o outro é o seu dinheiro voltando.`}
+      No razão sai uma linha por antecipação abatida, dizendo quanto foi juro e quanto foi principal.</div></div>`;
+}
+
+function salvarRateio() {
+  limpaErro('ra_erro');
+  const v = num(val('ra_valor')), data = val('ra_data') || hoje();
+  const obs = val('ra_obs').trim();
+  if (!(v > 0)) return erro('ra_erro', 'Informe o valor que entrou.');
+  if (mesFechado(mesDe(data)))
+    return erro('ra_erro', `${mesLabel(mesDe(data))} está fechado. Reabra em Fechamento ou escolha outra data.`);
+  const p = planoRateio(rtCli, v, data);
+  if (!p.itens.length) return erro('ra_erro', 'Não há nada em aberto para abater deste cliente.');
+  if (p.sobra > .005)
+    return erro('ra_erro', `Sobram ${brl(p.sobra)}: o valor é maior que o total devido de ${brl(raTotalDevido())}.`);
+
+  confirmar(`Abater <b>${brl(v)}</b> de ${esc(rtCli)} em ${p.itens.length} título(s)?`
+    + `<br><br>${brl(p.totalParcela + p.totalJuros)} em juros e ${brl(p.totalPrincipal)} em principal.`
+    + ` Entram ${brl(p.totalJuros)} no resultado, que é o juro corrido reconhecido agora.`
+    + `<br><br>Sai uma linha por título no razão.`, () => {
+
+    const lote = uid();
+    p.itens.forEach(x => {
+      const t = x.t;
+      const abateTitulo = +(x.deParcela + x.dePrincipal).toFixed(2);
+      const total = +(abateTitulo + x.deJuros).toFixed(2);
+      if (total <= .005) return;
+
+      t.valor = +((t.valor || 0) - abateTitulo).toFixed(2);
+      // guarda onde o relógio estava: sem isso, desfazer devolveria o saldo
+      // mas deixaria os juros do período perdidos para sempre
+      const relogioAntes = t.jurosAte === undefined ? null : t.jurosAte;
+      if (x.jurosAte) t.jurosAte = x.jurosAte;
+      const quitou = Math.abs(t.valor) < .005;
+      if (quitou) { t.status = 'PAGO'; t.dataReceb = data; t.valorRecebido = total; }
+
+      const rot = t.tipo === 'JUROS' ? 'Parcela de juros' : numAntLabel(t.numAntecipacao);
+      const partes = [
+        x.deParcela > .005 ? `${brl(x.deParcela)} de juros já reconhecidos` : '',
+        x.deJuros > .005 ? `${brl(x.deJuros)} de juros do período` : '',
+        x.dePrincipal > .005 ? `${brl(x.dePrincipal)} de principal` : ''
+      ].filter(Boolean).join(' + ');
+
+      DB.movs.push({
+        id: uid(), seq: proximaSeq(), fonte: t.fonte, data,
+        tipo: t.tipo === 'JUROS' ? 'RECEBIMENTO' : 'ANTECIPACAO_RETORNO',
+        descricao: `${rot} — ${rtCli}: ${partes}`,
+        cliente: rtCli, tituloId: t.id, operacaoId: null,
+        entrada: total, saida: null,
+        // só o juro corrido é receita; o resto já era direito ou é principal
+        resultado: x.deJuros > .005 ? x.deJuros : null,
+        contaId: null, servico: null,
+        parcial: !quitou, amortizado: abateTitulo,
+        loteRateio: lote, relogioAntes,
+        obs: obs || `Rateio de ${brl(v)} recebidos em ${fmtBR(data)}`, deletedAt: null
+      });
+    });
+
+    save(); closeModal('ovRateio'); render();
+    toast(`${brl(v)} de ${rtCli} rateados em ${p.itens.length} título(s)`);
+  }, 'Ratear recebimento');
+}
+
+/* Desfaz o rateio inteiro: um por um seria refazer a conta de cabeça. */
+function desfazerRateio(lote) {
+  const linhas = movs().filter(m => m.loteRateio === lote);
+  if (!linhas.length) return toast('Rateio não encontrado');
+  if (bloqueadoPorFechamento(linhas[0].data)) return;
+  const total = +linhas.reduce((s, m) => s + (m.entrada || 0), 0).toFixed(2);
+  confirmar(`Desfazer o rateio de <b>${brl(total)}</b> em ${linhas.length} título(s)?`
+    + `<br><br>Cada título volta ao saldo que tinha e as linhas saem do razão.`, () => {
+    linhas.forEach(m => {
+      const t = DB.titulos.find(x => x.id === m.tituloId);
+      if (!t) return;
+      t.valor = +((t.valor || 0) + (m.amortizado || 0)).toFixed(2);
+      if (t.status === 'PAGO') { t.status = 'A_VENCER'; t.dataReceb = null; t.valorRecebido = null; }
+      // o relógio volta para onde estava, senão o juro do período some
+      if (m.relogioAntes === null || m.relogioAntes === undefined) delete t.jurosAte;
+      else t.jurosAte = m.relogioAntes;
+    });
+    DB.movs = DB.movs.filter(m => m.loteRateio !== lote);
+    save(); render();
+    toast(`Rateio de ${brl(total)} desfeito`);
+  }, 'Desfazer rateio');
 }
 
 /* =========================================================================
