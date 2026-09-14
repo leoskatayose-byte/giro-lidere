@@ -380,6 +380,25 @@ tr.crmov{background:var(--raise)}
 @keyframes piscada{0%,100%{background:transparent}30%,70%{background:color-mix(in srgb,var(--acc) 26%,transparent)}}
 tr.pisca{animation:piscada 1.6s ease-in-out 2}
 .crorig{font-size:10px;color:var(--mut);font-style:normal}
+/* Foco visível: quem navega por teclado precisa saber onde está. O anel só
+   aparece para quem usa teclado, não em todo clique de mouse. */
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px;border-radius:4px}
+.nav-i:focus-visible,.aba:focus-visible{outline-offset:-2px}
+/* No celular o alvo de toque precisa caber no dedo */
+@media(max-width:700px){
+  .btn,.iconbtn,.nav-i,.seg .o{min-height:40px}
+  .iconbtn{min-width:40px}
+  .acoes{gap:6px;flex-wrap:wrap}
+  .stats{grid-template-columns:1fr 1fr}
+  .fgrid{grid-template-columns:1fr}
+  .modal{max-height:92vh}
+  .filters{gap:6px}
+  .filters .busca{min-width:100%}
+}
+@media(max-width:430px){.stats{grid-template-columns:1fr}}
+/* Quem prefere menos movimento não leva animação */
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;
+  animation-iteration-count:1!important;transition-duration:.01ms!important}}
 .hist-i{padding:3px 0;font-size:12px;line-height:1.5}
 .hist-i b{color:var(--txt)}
 .hist-c{display:inline-block;margin-left:8px;font-style:normal;font-size:10.5px;color:var(--mut)}
@@ -753,6 +772,7 @@ tr.crmov td{border-bottom-color:var(--line)}
       <button class="btn btn-sm" onclick="opAddTit()">+ Adicionar título</button></div>
     <div id="op_lista"></div>
     <div class="somatit" id="op_soma"></div>
+    <div class="memo" id="op_resumo"></div>
     <div id="op_caixa"></div>
     <div class="field"><label>Observação</label><textarea id="op_obs" rows="2"></textarea></div>
     <div class="erro" id="op_erro"></div>
@@ -3163,7 +3183,29 @@ function opCalc() {
   box.className = 'somatit ' + (bate ? 'ok' : 'erro');
   box.textContent = bate ? `Total dos títulos: ${brl(total)} — bate com o valor bruto.`
     : `Total dos títulos: ${brl(total)} · Bruto: ${brl(bruto)} · ${bruto - total >= 0 ? 'falta' : 'sobra'} ${brl(Math.abs(bruto - total))}`;
+  opResumo(bruto, liq, total);
   return opCaixa();
+}
+
+/* O que vai acontecer, escrito como se fala. Formulário grande é onde o erro
+   caro nasce: a pessoa confere campo a campo e não vê o conjunto. */
+function opResumo(bruto, liq, total) {
+  const box = el('op_resumo'); if (!box) return;
+  const linhas = opLinhas().filter(l => l.valor > 0);
+  if (!(liq > 0) && !linhas.length) { box.classList.remove('show'); return; }
+  const desagio = +(bruto - liq).toFixed(2);
+  const fonte = rotuloFonte(val('op_fonte'));
+  const cli = val('op_cli').trim() || 'o cliente';
+  const venc = linhas.map(l => l.venc).filter(Boolean).sort();
+  box.innerHTML = `<div class="l" style="font-weight:600"><span>Ao salvar</span><span></span></div>
+    <div class="l"><span>Sai de <b>${esc(fonte)}</b> para ${esc(cli)}</span><span class="neg">${brl(-liq)}</span></div>
+    <div class="l"><span>Entram ${linhas.length} título(s) na carteira${venc.length
+      ? `, vencendo entre ${fmtBR(venc[0])} e ${fmtBR(venc[venc.length - 1])}` : ''}</span><span>${brl(total)}</span></div>
+    <div class="l tot"><span>Receita de deságio</span><span class="pos">${brl(desagio)}</span></div>
+    <div class="conta">${Math.abs(total - bruto) > .01
+      ? `<b class="neg">Os títulos somam ${brl(total)} e o bruto é ${brl(bruto)}.</b> Ajuste antes de salvar.`
+      : `O caixa cai ${brl(liq)}, a carteira sobe ${brl(total)} e a diferença de ${brl(desagio)} é a sua receita. A conciliação continua fechando.`}</div>`;
+  box.classList.add('show');
 }
 /* Na operação quem sai do caixa é o líquido enviado, não o bruto. */
 function opCaixa() {
@@ -7536,6 +7578,155 @@ function faixaPerfil() {
       : 'Perfil <b>Consulta</b>: você vê e imprime tudo, mas não altera nada. Peça ao administrador se precisar lançar.'}
   </div>`;
 }
+
+/* =========================================================================
+   Acessibilidade e teclado
+
+   O sistema é usado o dia inteiro por quem lança dezenas de linhas. Quem
+   trabalha assim não quer tirar a mão do teclado, e quem usa leitor de tela
+   precisa que o botão diga o que faz — um "×" sozinho não diz nada.
+
+   Nada aqui muda o visual. São as marcações que faltavam e os atalhos que
+   qualquer formulário deveria ter: Esc fecha, Enter confirma, o foco entra no
+   modal quando ele abre e volta para onde estava quando ele fecha.
+   ========================================================================= */
+
+/* ---------- Marcações que o HTML não tinha ---------- */
+function acessibilizar(raiz) {
+  const r = raiz || document;
+
+  // botão de fechar: o "×" precisa de nome para quem não enxerga o símbolo
+  r.querySelectorAll('.modal-x').forEach(b => {
+    if (!b.getAttribute('aria-label')) b.setAttribute('aria-label', 'Fechar');
+    b.setAttribute('type', 'button');
+  });
+
+  // botão de ícone: o title já existe em quase todos; vira nome acessível
+  r.querySelectorAll('.iconbtn').forEach(b => {
+    const t = b.getAttribute('title');
+    if (t && !b.getAttribute('aria-label')) b.setAttribute('aria-label', t);
+    b.setAttribute('type', 'button');
+  });
+
+  // diálogos: o leitor de tela precisa saber que aquilo é um diálogo e qual
+  r.querySelectorAll('.overlay').forEach(o => {
+    o.setAttribute('role', 'dialog');
+    o.setAttribute('aria-modal', 'true');
+    const h = o.querySelector('.modal-head h3');
+    if (h) {
+      if (!h.id) h.id = o.id + '_tit';
+      o.setAttribute('aria-labelledby', h.id);
+    }
+  });
+
+  // o segmentado é um grupo de opções, não uma pilha de divs clicáveis
+  r.querySelectorAll('.seg').forEach(s => {
+    s.setAttribute('role', 'radiogroup');
+    s.querySelectorAll('.o').forEach(o => {
+      o.setAttribute('role', 'radio');
+      o.setAttribute('tabindex', '0');
+      o.setAttribute('aria-checked', o.classList.contains('sel') ? 'true' : 'false');
+      if (!o.dataset.tecla) {
+        o.dataset.tecla = '1';
+        o.addEventListener('keydown', e => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); o.click(); }
+        });
+      }
+    });
+  });
+
+  // campo sem <label> associado fica sem nome; o texto ao lado vira o nome
+  r.querySelectorAll('.field').forEach(f => {
+    const lab = f.querySelector('label');
+    const campo = f.querySelector('input, select, textarea');
+    if (!lab || !campo) return;
+    if (!campo.id) campo.id = 'c' + Math.random().toString(36).slice(2, 9);
+    if (!lab.getAttribute('for')) lab.setAttribute('for', campo.id);
+    const hint = f.querySelector('.hint');
+    if (hint && !campo.getAttribute('aria-describedby')) {
+      if (!hint.id) hint.id = campo.id + '_h';
+      campo.setAttribute('aria-describedby', hint.id);
+    }
+  });
+
+  // tabela sem cabeçalho marcado não é lida como tabela
+  r.querySelectorAll('thead th').forEach(th => {
+    if (!th.getAttribute('scope')) th.setAttribute('scope', 'col');
+  });
+
+  // o item de menu ativo precisa ser anunciado como ativo
+  r.querySelectorAll('.nav-i').forEach(b => {
+    b.setAttribute('aria-current', b.classList.contains('on') ? 'page' : 'false');
+  });
+}
+
+/* ---------- Teclado ---------- */
+let focoAnterior = null;
+
+/* Esc fecha o diálogo de cima; Enter confirma quando não se está num textarea. */
+document.addEventListener('keydown', e => {
+  const abertos = [...document.querySelectorAll('.overlay.show')];
+  if (!abertos.length) return;
+  const topo = abertos[abertos.length - 1];
+
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    const x = topo.querySelector('.modal-x') || topo.querySelector('.btn-ghost');
+    if (x) x.click(); else closeModal(topo.id);
+    return;
+  }
+
+  if (e.key === 'Enter' && !e.shiftKey) {
+    const alvo = e.target;
+    if (alvo && (alvo.tagName === 'TEXTAREA' || alvo.tagName === 'BUTTON')) return;
+    const ok = topo.querySelector('.modal-foot .btn-gold, .modal-foot .btn-neg, #cf_ok');
+    if (ok) { e.preventDefault(); ok.click(); }
+    return;
+  }
+
+  // o foco não escapa do diálogo enquanto ele estiver aberto
+  if (e.key === 'Tab') {
+    const f = [...topo.querySelectorAll('button, input, select, textarea, a[href], [tabindex]:not([tabindex="-1"])')]
+      .filter(x => x.offsetParent !== null && !x.disabled);
+    if (!f.length) return;
+    const primeiro = f[0], ultimo = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === primeiro) { e.preventDefault(); ultimo.focus(); }
+    else if (!e.shiftKey && document.activeElement === ultimo) { e.preventDefault(); primeiro.focus(); }
+  }
+});
+
+/* openModal e closeModal ganham foco e marcação, sem que nenhuma tela mude. */
+(function ligarFoco() {
+  const abrir = window.openModal, fechar = window.closeModal;
+  window.openModal = function (id) {
+    focoAnterior = document.activeElement;
+    abrir(id);
+    const o = document.getElementById(id);
+    if (!o) return;
+    acessibilizar(o);
+    setTimeout(() => {
+      const alvo = o.querySelector('.modal-body input:not([type=hidden]), .modal-body select, .modal-body textarea')
+        || o.querySelector('.modal-foot .btn-gold') || o.querySelector('.modal-x');
+      if (alvo) alvo.focus();
+    }, 40);
+  };
+  window.closeModal = function (id) {
+    fechar(id);
+    if (focoAnterior && document.contains(focoAnterior)) { try { focoAnterior.focus(); } catch (e) { } }
+    focoAnterior = null;
+  };
+})();
+
+/* Toda renderização remarca a tela nova. */
+(function ligarRender() {
+  const orig = window.render;
+  window.render = function () {
+    const r = orig.apply(this, arguments);
+    acessibilizar();
+    return r;
+  };
+})();
+acessibilizar();
 
 /* =========================================================================
    FASE 2 — nuvem: login, aprovação e gravação no Supabase
