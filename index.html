@@ -371,6 +371,12 @@ tbody tr{transition:.12s} tbody tr:hover{background:var(--panel2)}
 .cal .tot{position:absolute;right:6px;bottom:4px;font-size:9px;color:var(--mut);font-variant-numeric:tabular-nums}
 tr.apoff{opacity:.4}
 tr.apoff .inl{opacity:.7}
+/* Amortização: a proporção entre o que pagou juro e o que abateu dívida */
+.barra{display:flex;height:14px;border-radius:7px;overflow:hidden;background:var(--raise);border:1px solid var(--line)}
+.barra .j{background:var(--warn)}
+.barra .p{background:var(--acc)}
+tr.crmov{background:var(--raise)}
+tr.crmov td{border-bottom-color:var(--line)}
 .agpe{font-size:11.5px;color:var(--mut);margin-top:8px;text-align:center}
 .agpe b{color:var(--dim)}
 
@@ -773,6 +779,7 @@ tr.apoff .inl{opacity:.7}
     </div>
     <div class="memo" id="rc_memo"></div>
     <div id="rc_caixa"></div>
+    <div id="rc_sobra"></div>
     <div id="rc_hist"></div>
     <div class="field"><label>Observação</label><textarea id="rc_obs" rows="2"></textarea></div>
     <div class="erro" id="rc_erro"></div>
@@ -1144,12 +1151,23 @@ function closeModal(id) { document.getElementById(id).classList.remove('show'); 
 function openModal(id) { document.getElementById(id).classList.add('show'); }
 function erro(id, msg) { const e = document.getElementById(id); e.textContent = msg; e.classList.add('show'); }
 function limpaErro(id) { document.getElementById(id).classList.remove('show'); }
+/* A mensagem aceita marcação simples (<b>, <br>) porque a confirmação de uma
+   operação financeira precisa destacar o número que está em jogo. Todo texto
+   vindo de cadastro tem que passar por esc() em quem chama.
+
+   O botão é substituído a cada chamada e volta a ser inerte ao fechar: senão
+   o callback da confirmação cancelada continuaria pendurado, e um clique
+   depois executaria a ação que a pessoa acabou de recusar. */
 function confirmar(msg, fn, titulo) {
   document.getElementById('cf_tit').textContent = titulo || 'Confirmar';
-  document.getElementById('cf_msg').textContent = msg;
+  document.getElementById('cf_msg').innerHTML = msg;
   const b = document.getElementById('cf_ok'), novo = b.cloneNode(true);
   b.parentNode.replaceChild(novo, b);
-  novo.addEventListener('click', () => { closeModal('ovConf'); fn(); });
+  let usado = false;
+  novo.addEventListener('click', () => {
+    if (usado || !document.getElementById('ovConf').classList.contains('show')) return;
+    usado = true; closeModal('ovConf'); fn();
+  });
   openModal('ovConf');
 }
 
@@ -1613,6 +1631,7 @@ const IC = {
   fechamento: '<rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 018 0v3"/>',
   acesso: '<circle cx="12" cy="8" r="3.4"/><path d="M5.5 20c0-3.4 2.9-5.6 6.5-5.6s6.5 2.2 6.5 5.6"/>',
   lixeira: '<path d="M3.5 6h17M8.5 6V3.6h7V6M6.4 6v14.4h11.2V6"/>',
+  correcao: '<path d="M4 19V5M4 19h16"/><path d="M7 16l3.5-4 3 2.5L20 7"/><circle cx="20" cy="7" r="1.3"/>',
   clientes: '<circle cx="8" cy="8" r="3.2"/><path d="M2.5 20c0-3.2 2.5-5.2 5.5-5.2s5.5 2 5.5 5.2"/><path d="M16 5.5a3 3 0 010 5.6M18 14.6c2 .7 3.5 2.5 3.5 5.4"/>'
 };
 const svgIc = k => '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' + (IC[k] || '') + '</svg>';
@@ -1620,7 +1639,7 @@ const svgIc = k => '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" 
 const NAV = [
   { g: 'Visão', its: [['painel', 'Painel']] },
   { g: 'Operação', its: [['razao', 'Razão'], ['titulos', 'Títulos a vencer'], ['antecipacoes', 'Antecipações'], ['captacoes', 'Captações'], ['recebidos', 'Recebidos']] },
-  { g: 'Análise', its: [['clientes', 'Por cliente'], ['resultado', 'Resultado'], ['projecao', 'Projeção de caixa'], ['contas', 'Contas a pagar']] },
+  { g: 'Análise', its: [['correcao', 'Correção'], ['clientes', 'Por cliente'], ['resultado', 'Resultado'], ['projecao', 'Projeção de caixa'], ['contas', 'Contas a pagar']] },
   { g: 'Ajustes', its: [['fechamento', 'Fechamento'], ['cadastros', 'Cadastros'], ['plano', 'Plano de contas'], ...(MODO_NUVEM ? [['acesso', 'Acesso']] : []), ['lixeira', 'Excluídos']] }
 ];
 const SECAO = {
@@ -1630,6 +1649,7 @@ const SECAO = {
   antecipacoes: ['Antecipações', 'Recurso enviado que ainda não voltou, com juros projetados'],
   captacoes: ['Captações', 'Recurso de terceiro no seu caixa — e o custo que ele gera'],
   recebidos: ['Recebidos', 'Títulos e antecipações já baixados'],
+  correcao: ['Correção', 'A planilha de correção dia a dia, com o saldo quebrado em principal e juros'],
   clientes: ['Por cliente', 'Quanto cada cliente deve hoje, e de que esse número é feito'],
   resultado: ['Resultado', 'Receitas e despesas por conta, com comparativo do período anterior'],
   projecao: ['Projeção de caixa', 'O que já está contratado, dia a dia, a partir do saldo de hoje'],
@@ -2858,7 +2878,7 @@ function salvarLanc() {
 function excluirLanc(id) {
   const m = DB.movs.find(x => x.id === id); if (!m) return;
   if (bloqueadoPorFechamento(m.data)) return;
-  confirmar(`Mover para Excluídos o lançamento "${m.descricao || 'sem descrição'}"?`, () => {
+  confirmar(`Mover para Excluídos o lançamento "${esc(m.descricao || 'sem descrição')}"?`, () => {
     m.deletedAt = Date.now(); save(); render(); toast('Movido para Excluídos');
   }, 'Excluir lançamento');
 }
@@ -3132,7 +3152,7 @@ function excluirAnt(id) {
   // aí a contrapartida é um ajuste.
   const temEnvio = movs().some(m => m.tituloId === id && m.tipo === 'ANTECIPACAO_ENVIO');
   const efeito = temEnvio ? 0 : +(-pesoConc(t.tipo, t.valor)).toFixed(2);
-  confirmar(`Mover para Excluídos a ${ehCaptacao(t) ? 'captação' : 'antecipação'} de ${brl(t.valor)} para ${t.cliente}?`
+  confirmar(`Mover para Excluídos a ${ehCaptacao(t) ? 'captação' : 'antecipação'} de ${brl(t.valor)} para ${esc(t.cliente)}?`
     + (efeito ? ` Será lançado um ajuste de ${brl(efeito)} no razão como contrapartida — sem ele a conciliação passaria a acusar essa diferença.` : ''), () => {
     const ts = Date.now(); t.deletedAt = ts;
     DB.movs.forEach(m => { if (m.tituloId === id && m.tipo === 'ANTECIPACAO_ENVIO') m.deletedAt = ts; });
@@ -3156,7 +3176,7 @@ function excluirAnt(id) {
    volta e captação que se devolve. E em dois modos: total, que quita, e
    parcial, que abate o que entrou e deixa o resto em aberto — porque devedor
    que paga metade não some da lista nem continua devendo o valor cheio. */
-let rcEditadoAMao = false, rcModoAtual = 'TOTAL';
+let rcEditadoAMao = false, rcModoAtual = 'TOTAL', rcCienteDaSobra = false;
 
 /* Do lado do caixa, captação é o espelho: o dinheiro SAI para voltar ao
    investidor, em vez de entrar. */
@@ -3196,6 +3216,7 @@ function abrirReceb(id) {
     + (jaVeio ? ` <b>· ${brl(jaVeio)} já ${cap ? 'devolvido' : 'recebido'} em parcelas</b>` : '');
   setVal('rc_data', hoje()); setVal('rc_obs', ''); setVal('rc_juros', '');
   setVal('rc_valor', t.valor);
+  el('rc_sobra').innerHTML = ''; rcCienteDaSobra = false;
   rcModo('TOTAL');
   openModal('ovReceb');
 }
@@ -3212,6 +3233,7 @@ function rcCalc(preencher) {
   const cap = rcSaida(t), data = val('rc_data') || hoje();
   // devolver recurso tira dinheiro do caixa como qualquer outra saída
   avisoCaixa('rc_caixa', t.fonte, cap ? num(val('rc_valor')) : 0, data, {});
+  rcSobra(t, data);
   const p = projecao(t, data);
   const btn = el('rc_jurosBtn');
 
@@ -3251,6 +3273,43 @@ function rcCalc(preencher) {
     ${p.dias < 0 ? `<div class="neg" style="margin-top:6px">A data está antes de ${fmtBR(p.desde)}.</div>` : ''}
     ${difere ? `<div style="margin-top:8px"><button class="btn btn-sm" onclick="rcUsarCalculado(${p.total.toFixed(2)})">Usar o valor calculado (${brl(p.total)})</button></div>` : ''}`;
   box.classList.add('show');
+}
+/* Baixa total com valor menor que o devido encerra o título e transforma a
+   diferença em perda, sem ninguém decidir isso. É o jeito mais fácil de
+   perder o controle de uma cobrança: o saldo some da lista e vira prejuízo
+   por descuido. Então a tela avisa antes, e oferece o caminho certo. */
+function rcSobra(t, data) {
+  const box = el('rc_sobra'); if (!box) return null;
+  if (rcModoAtual !== 'TOTAL' || t.status === 'PAGO') { box.innerHTML = ''; return null; }
+  const v = num(val('rc_valor'));
+  if (!isFinite(v) || v <= 0) { box.innerHTML = ''; return null; }
+  const cap = rcSaida(t);
+  // O que importa aqui é o saldo REGISTRADO: juro projetado que ainda não foi
+  // apropriado não é direito no sistema, e avisar por causa dele seria ruído
+  // em toda baixa. O risco que este aviso existe para cobrir é o principal
+  // sumir da cobrança sem ninguém decidir isso.
+  const falta = +((t.valor || 0) - v).toFixed(2);
+  if (falta <= .005) { box.innerHTML = ''; return null; }
+  const p = projecao(t, data || hoje());
+  const juros = p.dias > 0 ? p.juros : 0;
+  box.innerHTML = `<div class="alert bad">
+    <b>Faltam ${brl(falta)} para quitar, e a baixa total encerra o título assim mesmo.</b>
+    <button class="btn btn-sm" onclick="rcVirarParcial()">Usar baixa parcial</button>
+    Em aberto: <b>${brl(t.valor)}</b>${juros > .005 ? `, mais ${brl(juros)} de juros corridos até ${fmtBR(data || hoje())} que ainda não foram apropriados` : ''}.
+    Encerrando agora, ${brl(falta)} ${cap ? 'deixam de ser devolvidos' : 'somem do que está na rua'} sem virar perda registrada:
+    a conciliação continua fechando, mas a cobrança desaparece da lista e o prejuízo não aparece no resultado.
+    Na baixa parcial o título continua aberto pelo que resta.
+    ${!cap ? `Se o cliente realmente não vai pagar, receba ${brl(v)} em parcial e depois dê baixa por perda no resto, para a despesa aparecer no resultado.` : ''}</div>`;
+  return { devido: +(t.valor || 0).toFixed(2), falta, juros };
+}
+function rcVirarParcial() {
+  rcModo('PARCIAL');
+  const t = DB.titulos.find(x => x.id === val('rc_id'));
+  if (t) {
+    const p = projecao(t, val('rc_data') || hoje());
+    if (p.dias > 0 && p.juros > .005) setVal('rc_juros', Math.min(num(val('rc_valor')), p.juros).toFixed(2));
+  }
+  rcCalc(false);
 }
 function rcUsarCalculado(v) { setVal('rc_valor', v.toFixed(2)); rcEditadoAMao = false; rcCalc(false); }
 function rcUsarJuros(v) { setVal('rc_juros', v.toFixed(2)); rcCalc(false); }
@@ -3318,6 +3377,18 @@ function salvarReceb() {
     return toast(`${brl(v)} ${cap ? 'devolvido' : 'recebido'} — restam ${brl(t.valor)}`);
   }
 
+  const sobra = rcSobra(t, data);
+  if (sobra && !rcCienteDaSobra) {
+    rcCienteDaSobra = true;
+    return confirmar(`<b>${brl(sobra.falta)}</b> ficam de fora e o título é encerrado assim mesmo.`
+      + `<br><br>Em aberto hoje: <b>${brl(sobra.devido)}</b>. Recebendo ${brl(v)} como baixa total,`
+      + ` o que falta some da cobrança sem virar perda no resultado.`
+      + `<br><br>Se foi pagamento parcial, cancele e use <b>baixa parcial</b>.`,
+      () => { rcCienteDaSobra = false; salvarReceb(); },
+      'Baixa total por valor menor');
+  }
+  rcCienteDaSobra = false;
+
   const dif = +(v - (t.valor || 0)).toFixed(2);
   t.status = 'PAGO'; t.dataReceb = data; t.valorRecebido = v;
   if (obs) t.obs = (t.obs ? t.obs + ' | ' : '') + obs;
@@ -3363,8 +3434,8 @@ function desfazerBaixa(id) {
   if (bloqueadoPorFechamento(t.dataReceb)) return;
   const ant = t.tipo === 'ANTECIPACAO';
   confirmar(ant
-    ? `Desfazer o retorno da ${numAntLabel(t.numAntecipacao)} (${t.cliente})? O título volta para a vencer e a movimentação de retorno é removida.`
-    : `Desfazer a baixa do título${t.nf ? ' NF ' + t.nf : ''} de ${t.cliente}? Ele volta para a vencer e a movimentação de recebimento é removida.`,
+    ? `Desfazer o retorno da ${numAntLabel(t.numAntecipacao)} (${esc(t.cliente)})? O título volta para a vencer e a movimentação de retorno é removida.`
+    : `Desfazer a baixa do título${t.nf ? ' NF ' + esc(t.nf) : ''} de ${esc(t.cliente)}? Ele volta para a vencer e a movimentação de recebimento é removida.`,
     () => {
       // as parcelas ficam: elas têm o desfazer delas, e apagar junto sumiria
       // com dinheiro que de fato entrou
@@ -3475,12 +3546,12 @@ function salvarSacado() {
 function excluirCliente(id) {
   const c = DB.clientes.find(x => x.id === id); if (!c) return;
   const uso = tits().filter(t => t.cliente === c.nome && emAberto(t)).length;
-  confirmar(uso ? `${c.nome} tem ${uso} título(s) em aberto. Excluir só tira o nome da lista — os títulos continuam. Confirma?`
+  confirmar(uso ? `${esc(c.nome)} tem ${uso} título(s) em aberto. Excluir só tira o nome da lista — os títulos continuam. Confirma?`
     : `Mover ${c.nome} para Excluídos?`, () => { c.deletedAt = Date.now(); save(); render(); toast('Movido para Excluídos'); }, 'Excluir cliente');
 }
 function excluirSacado(id) {
   const p = DB.sacados.find(x => x.id === id); if (!p) return;
-  confirmar(`Mover ${p.nome} para Excluídos?`, () => { p.deletedAt = Date.now(); save(); render(); toast('Movido para Excluídos'); }, 'Excluir sacado');
+  confirmar(`Mover ${esc(p.nome)} para Excluídos?`, () => { p.deletedAt = Date.now(); save(); render(); toast('Movido para Excluídos'); }, 'Excluir sacado');
 }
 
 /* ---------- Plano de contas ---------- */
@@ -3758,7 +3829,7 @@ function desfazerPerda(id) {
   if (!linhas.length) return;
   if (bloqueadoPorFechamento(linhas[linhas.length - 1].data)) return;
   const soma = linhas.reduce((s, m) => s + Math.abs(m.resultado || 0), 0);
-  confirmar(`Desfazer a perda de ${brl(soma)} de ${t.cliente}? O título volta para a vencer e a despesa sai do resultado.`, () => {
+  confirmar(`Desfazer a perda de ${brl(soma)} de ${esc(t.cliente)}? O título volta para a vencer e a despesa sai do resultado.`, () => {
     t.valor = +((t.valor || 0) + soma).toFixed(2);
     t.status = 'A_VENCER'; t.dataReceb = null; t.valorRecebido = null;
     DB.movs = DB.movs.filter(m => !(m.tituloId === id && m.tipo === 'PERDA'));
@@ -4674,8 +4745,8 @@ function excluirTitulo() {
   // saída de caixa, e a conta continua fechando sozinha. Título avulso, não —
   // ele sai do "na rua" sem que nada compense, então precisa do ajuste.
   const msg = temEnvio
-    ? `Excluir a antecipação de ${brl(t.valor)} para ${t.cliente}? O envio no razão sai junto, e a conciliação continua fechando.`
-    : `Excluir o título de ${brl(t.valor)} de ${t.cliente}? Ele sai ${ehCaptacao(t) ? 'do passivo' : 'do "na rua"'}, então será lançado um ajuste de ${brl(efeitoExcluir)} no razão como contrapartida — sem isso a conciliação passaria a acusar essa diferença.`;
+    ? `Excluir a antecipação de ${brl(t.valor)} para ${esc(t.cliente)}? O envio no razão sai junto, e a conciliação continua fechando.`
+    : `Excluir o título de ${brl(t.valor)} de ${esc(t.cliente)}? Ele sai ${ehCaptacao(t) ? 'do passivo' : 'do "na rua"'}, então será lançado um ajuste de ${brl(efeitoExcluir)} no razão como contrapartida — sem isso a conciliação passaria a acusar essa diferença.`;
   confirmar(msg, () => {
     const ts = Date.now();
     t.deletedAt = ts;
@@ -4946,7 +5017,8 @@ function salvarApropriar() {
     antes: marcadas.map(x => ({
       id: x.t.id, valor: x.t.valor,
       jurosAte: x.t.jurosAte === undefined ? null : x.t.jurosAte,
-      taxa: x.t.taxaMensal === undefined ? null : x.t.taxaMensal
+      taxa: x.t.taxaMensal === undefined ? null : x.t.taxaMensal,
+      jurosSomados: x.t.jurosSomados === undefined ? null : x.t.jurosSomados
     })),
     criou: [], somou: [], movs: []
   };
@@ -5027,6 +5099,9 @@ function salvarApropriar() {
       const antes = x.t.valor;
       x.t.valor = +(antes + x.juros).toFixed(2);
       const aplicado = +(x.t.valor - antes).toFixed(2);
+      // marca quanto do valor de hoje é juro embutido: a tela de correção
+      // precisa disso para saber qual era o principal de origem
+      x.t.jurosSomados = +((x.t.jurosSomados || 0) + aplicado).toFixed(2);
       efeito(x.t.fonte, chaveJuros(x.t), x.custo ? -aplicado : aplicado);
     });
   }
@@ -5090,6 +5165,8 @@ function desfazerApropriacao(loteId) {
       t.valor = a.valor;
       if (a.jurosAte === null) delete t.jurosAte; else t.jurosAte = a.jurosAte;
       if (a.taxa === null) delete t.taxaMensal; else t.taxaMensal = a.taxa;
+      if (a.jurosSomados === undefined || a.jurosSomados === null) delete t.jurosSomados;
+      else t.jurosSomados = a.jurosSomados;
     });
     // 2) a parcela que só existia por causa disto desaparece; a que já existia
     //    volta ao valor, ao vencimento e à composição que tinha antes
@@ -5818,6 +5895,258 @@ function extratoHTML(p) {
     tabela('Em aberto', 'antecipações e títulos que ainda não voltaram', abertos) +
     (p.captacao.length ? tabela('Recurso de terceiro', 'dele no seu caixa — não é a receber', p.captacao) : '') +
     baixados;
+}
+
+/* =========================================================================
+   Correção
+   A planilha de correção reproduzida dentro do sistema: uma linha por dia,
+   o saldo de ontem rendendo hoje, crédito abatendo e débito somando.
+
+   A diferença é que aqui a coluna saldo vem quebrada em principal e juros,
+   e o crédito abate juros primeiro. Sem essa quebra dá para ver quanto o
+   cliente deve, mas não dá para ver o que está acontecendo com a dívida:
+   pagamento que só cobre a correção do mês deixa o principal parado, e no
+   saldo consolidado isso não aparece.
+   ========================================================================= */
+let crCli = null, crAte = null, crGrao = 'MES', crSoMov = false;
+
+const crClientes = () => [...new Set(tits()
+  .filter(t => fontesDoFiltro().includes(t.fonte) && t.tipo !== 'JUROS')
+  .map(t => t.cliente).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+
+/* Quanto saiu de fato para o cliente, e quando.
+   Antecipação lançada pelo sistema tem a saída no razão. A que veio da
+   planilha não tem, porque o efeito de caixa já estava no saldo inicial:
+   nesse caso o próprio título é o evento, e o valor de origem é o que ele
+   tem hoje mais o que já foi amortizado, menos juros somados dentro dele. */
+function crEventos(cliente, fs) {
+  const fontes = fs || fontesDoFiltro();
+  const ev = [];
+  const meus = tits().filter(t => t.cliente === cliente && fontes.includes(t.fonte)
+    && t.tipo !== 'JUROS' && !ehCaptacao(t));
+
+  meus.forEach(t => {
+    const envio = movs().find(m => m.tituloId === t.id
+      && (m.tipo === 'ANTECIPACAO_ENVIO' || m.tipo === 'OPERACAO') && (m.saida || 0) > 0);
+    if (envio) {
+      ev.push({ data: envio.data, debito: envio.saida, credito: 0, t, rotulo: crRotulo(t), origem: 'razão' });
+    } else {
+      const amortizado = parciaisDe(t.id).reduce((s, m) => s + (m.amortizado || 0), 0);
+      const base = +((t.valor || 0) + amortizado - (t.jurosSomados || 0)).toFixed(2);
+      if (base > .005)
+        ev.push({ data: t.dataEntrada, debito: base, credito: 0, t, rotulo: crRotulo(t), origem: 'abertura' });
+    }
+    // tudo que voltou, parcial ou total
+    movs().filter(m => m.tituloId === t.id && (m.entrada || 0) > 0).forEach(m => {
+      ev.push({ data: m.data, debito: 0, credito: m.entrada, t, rotulo: crRotulo(t), origem: m.parcial ? 'parcial' : 'baixa' });
+    });
+  });
+
+  // a parcela de juros não é dívida nova: ela é a correção já reconhecida.
+  // Entra só como marcação, para a linha do dia dizer o que aconteceu.
+  tits().filter(t => t.cliente === cliente && fontes.includes(t.fonte) && t.tipo === 'JUROS')
+    .forEach(t => (t.composicao || []).forEach(r => {
+      ev.push({ data: r.ate, debito: 0, credito: 0, apropriado: r.valor, t, rotulo: 'Apropriação', origem: 'apropriacao' });
+      // o que o cliente pagou dessa parcela abate a dívida como qualquer crédito
+    }));
+  tits().filter(t => t.cliente === cliente && fontes.includes(t.fonte) && t.tipo === 'JUROS')
+    .forEach(t => movs().filter(m => m.tituloId === t.id && (m.entrada || 0) > 0)
+      .forEach(m => ev.push({ data: m.data, debito: 0, credito: m.entrada, t, rotulo: 'Parcela de juros', origem: m.parcial ? 'parcial' : 'baixa' })));
+
+  return ev.filter(e => e.data).sort((a, b) => a.data.localeCompare(b.data));
+}
+const crRotulo = t => t.tipo === 'ANTECIPACAO' ? numAntLabel(t.numAntecipacao)
+  : t.nf ? 'NF ' + t.nf : TIPO_LABEL[t.tipo] || 'Título';
+
+/* A série dia a dia, no modelo da planilha. O crédito abate juros primeiro
+   e só depois o principal, que é a ordem que ele usa na cobrança. */
+function crSerie(cliente, ate, fs) {
+  const ev = crEventos(cliente, fs);
+  if (!ev.length) return { linhas: [], ev, principal: 0, juros: 0, saldo: 0 };
+  const taxa = crTaxa(cliente, fs);
+  const inicio = ev[0].data, fim = ate || hoje();
+  const porDia = {};
+  ev.forEach(e => (porDia[e.data] = porDia[e.data] || []).push(e));
+
+  const linhas = [];
+  let principal = 0, juros = 0;
+  let pagoJuros = 0, pagoPrincipal = 0, corrigidoTotal = 0;
+  let d = inicio;
+  while (d <= fim) {
+    const doDia = porDia[d] || [];
+    // o saldo de ontem rende hoje; no primeiro dia ainda não há o que render
+    const correcao = (d === inicio || principal + juros <= 0) ? 0
+      : +((principal + juros) * fatorJuros(taxa, 1)).toFixed(6);
+    juros += correcao; corrigidoTotal += correcao;
+
+    const debito = doDia.reduce((s, e) => s + e.debito, 0);
+    const credito = doDia.reduce((s, e) => s + e.credito, 0);
+    principal += debito;
+    const abateJuros = Math.min(credito, juros);
+    juros -= abateJuros;
+    const abatePrincipal = credito - abateJuros;
+    principal -= abatePrincipal;
+    pagoJuros += abateJuros; pagoPrincipal += abatePrincipal;
+
+    if (doDia.length || correcao > 0)
+      linhas.push({
+        data: d, correcao, debito, credito, abateJuros, abatePrincipal,
+        principal: +principal.toFixed(2), juros: +juros.toFixed(2),
+        saldo: +(principal + juros).toFixed(2),
+        eventos: doDia.filter(e => e.debito || e.credito || e.apropriado)
+      });
+    d = addDias(d, 1);
+  }
+  return {
+    linhas, ev, taxa, inicio, fim,
+    principal: +principal.toFixed(2), juros: +juros.toFixed(2),
+    saldo: +(principal + juros).toFixed(2),
+    enviado: +ev.reduce((s, e) => s + e.debito, 0).toFixed(2),
+    recebido: +ev.reduce((s, e) => s + e.credito, 0).toFixed(2),
+    pagoJuros: +pagoJuros.toFixed(2), pagoPrincipal: +pagoPrincipal.toFixed(2),
+    corrigido: +corrigidoTotal.toFixed(2)
+  };
+}
+
+/* A taxa do cliente: a dos títulos dele, quando todos usam a mesma. */
+function crTaxa(cliente, fs) {
+  const fontes = fs || fontesDoFiltro();
+  const ts = tits().filter(t => t.cliente === cliente && fontes.includes(t.fonte) && t.tipo !== 'JUROS');
+  const taxas = [...new Set(ts.map(taxaDa))];
+  return taxas.length === 1 ? taxas[0] : (taxas.length ? taxas[0] : taxaPadrao());
+}
+
+/* ---------- Tela ---------- */
+function crMuda(campo, v) {
+  if (campo === 'cli') crCli = v;
+  if (campo === 'ate') crAte = v;
+  if (campo === 'grao') crGrao = v;
+  if (campo === 'somov') crSoMov = v;
+  render();
+}
+
+VIEWS.correcao = function () {
+  const fs = fontesDoFiltro();
+  const clientes = crClientes();
+  if (!clientes.length) return `<div class="filters">${segFonte()}</div>
+    <div class="empty">Nenhum cliente com título nesta fonte.</div>`;
+  if (!crCli || !clientes.includes(crCli)) crCli = clientes[0];
+  const ate = crAte || hoje();
+  const s = crSerie(crCli, ate, fs);
+
+  const filtros = `<div class="filters">${segFonte()}
+    <select id="cr_cli" onchange="crMuda('cli', this.value)" style="max-width:230px">
+      ${clientes.map(c => `<option value="${esc(c)}" ${c === crCli ? 'selected' : ''}>${esc(c)}</option>`).join('')}
+    </select>
+    <label style="font-size:12.5px;color:var(--dim)">Corrigir até</label>
+    <input type="date" value="${ate}" onchange="crMuda('ate', this.value)" style="max-width:150px">
+    <div class="seg sm" style="margin:0">
+      <div class="o ${crGrao === 'MES' ? 'sel' : ''}" onclick="crMuda('grao','MES')">Por mês</div>
+      <div class="o ${crGrao === 'DIA' ? 'sel' : ''}" onclick="crMuda('grao','DIA')">Dia a dia</div>
+    </div>
+    <label style="font-size:12.5px;color:var(--dim)"><input type="checkbox" ${crSoMov ? 'checked' : ''}
+      onchange="crMuda('somov', this.checked)"> só dias com movimento</label>
+    <button class="btn btn-sm right" onclick="abrirExtrato('${esc(crCli).replace(/'/g, "\\'")}')">Extrato</button></div>`;
+
+  if (!s.linhas.length) return filtros + `<div class="empty">Sem movimento de ${esc(crCli)} até ${fmtBR(ate)}.</div>`;
+
+  const stats = `<div class="stats">
+    <div class="stat"><div class="k">Saldo devedor</div><div class="v">${brl(s.saldo)}</div>
+      <div class="sub">corrigido até ${fmtBR(ate)}, ${fmtTaxa(s.taxa)}% ao mês</div></div>
+    <div class="stat"><div class="k">Principal em aberto</div><div class="v">${brl(s.principal)}</div>
+      <div class="sub">de ${brl(s.enviado)} enviados</div></div>
+    <div class="stat"><div class="k">Juros em aberto</div><div class="v pos">${brl(s.juros)}</div>
+      <div class="sub">${brl(s.corrigido)} corridos, ${brl(s.pagoJuros)} já pagos</div></div>
+    <div class="stat"><div class="k">Recebido</div><div class="v">${brl(s.recebido)}</div>
+      <div class="sub">${brl(s.pagoJuros)} em juros, ${brl(s.pagoPrincipal)} em principal</div></div>
+  </div>`;
+
+  return filtros + stats + crAmortizacao(s) +
+    (crGrao === 'DIA' ? crTabelaDia(s) : crTabelaMes(s));
+};
+
+/* Onde a dívida está andando: quanto do que entrou pagou juros e quanto
+   abateu de verdade. Cliente que só cobre a correção nunca diminui a dívida,
+   e é isso que a barra mostra. */
+function crAmortizacao(s) {
+  const pago = s.pagoJuros + s.pagoPrincipal;
+  const pj = pago > 0 ? s.pagoJuros / pago * 100 : 0;
+  const so = s.pagoPrincipal < .005 && s.recebido > .005;
+  const mensal = +(s.saldo * (fatorJuros(s.taxa, 30))).toFixed(2);
+  return `<div class="panel" style="margin-bottom:14px"><div class="panel-head">
+      <h2>Amortização<small>de tudo que o cliente pagou, quanto foi juro e quanto abateu a dívida</small></h2></div>
+    <div style="padding:0 14px 14px">
+      ${pago > .005 ? `<div class="barra"><div class="j" style="width:${pj.toFixed(1)}%"></div><div class="p" style="width:${(100 - pj).toFixed(1)}%"></div></div>
+      <div class="gleg" style="margin:8px 0 0">${leg('var(--warn)', `Pagou juros ${brl(s.pagoJuros)} (${pj.toFixed(0)}%)`)}${leg('var(--acc)', `Abateu principal ${brl(s.pagoPrincipal)} (${(100 - pj).toFixed(0)}%)`)}</div>`
+      : `<div class="empty" style="margin:0">Nada recebido ainda deste cliente.</div>`}
+      <div class="memo show" style="margin-top:12px">
+        <div class="l"><span>Principal enviado</span><span>${brl(s.enviado)}</span></div>
+        <div class="l"><span>Juros corridos no período</span><span class="pos">${brl(s.corrigido)}</span></div>
+        <div class="l"><span>Recebido</span><span class="neg">${brl(-s.recebido)}</span></div>
+        <div class="l tot"><span>Saldo devedor hoje</span><span>${brl(s.saldo)}</span></div>
+        <div class="conta">O crédito abate juros primeiro e só depois o principal.
+          Nesse ritmo, o saldo de hoje gera <b>${brl(mensal)}</b> de correção nos próximos 30 dias:
+          ${so ? 'tudo que entrou até agora só cobriu juro, e o principal não andou.'
+        : s.pagoPrincipal > .005 ? `pagamento mensal abaixo disso faz a dívida crescer.`
+          : 'pagamento abaixo disso faz a dívida crescer.'}</div>
+      </div></div></div>`;
+}
+
+const crMesDe = d => d.slice(0, 7);
+
+function crTabelaMes(s) {
+  const g = {};
+  s.linhas.forEach(l => {
+    const k = crMesDe(l.data);
+    const m = g[k] = g[k] || { mes: k, correcao: 0, debito: 0, credito: 0, abateJuros: 0, abatePrincipal: 0, n: 0 };
+    m.correcao += l.correcao; m.debito += l.debito; m.credito += l.credito;
+    m.abateJuros += l.abateJuros; m.abatePrincipal += l.abatePrincipal;
+    m.n += l.eventos.length;
+    m.principal = l.principal; m.juros = l.juros; m.saldo = l.saldo;
+  });
+  const linhas = Object.values(g);
+  return `<div class="panel"><div class="panel-head"><h2>Correção mês a mês<small>o saldo de cada mês, no fechamento</small></h2></div>
+    <div class="tbl-scroll"><table><thead><tr>
+      <th>Mês</th><th class="num">Correção</th><th class="num">Enviado</th><th class="num">Recebido</th>
+      <th class="num">Abateu juros</th><th class="num">Abateu principal</th>
+      <th class="num">Principal</th><th class="num">Juros</th><th class="num">Saldo</th></tr></thead>
+    <tbody>${linhas.map(m => `<tr>
+      <td>${esc(mesLabel(m.mes))}${m.n ? ` <span class="chip chip-n">${m.n} mov</span>` : ''}</td>
+      <td class="num pos">${m.correcao > .005 ? brl(m.correcao) : '—'}</td>
+      <td class="num">${m.debito > .005 ? brl(m.debito) : '<span class="muted">—</span>'}</td>
+      <td class="num">${m.credito > .005 ? brl(m.credito) : '<span class="muted">—</span>'}</td>
+      <td class="num muted">${m.abateJuros > .005 ? brl(m.abateJuros) : '—'}</td>
+      <td class="num">${m.abatePrincipal > .005 ? brl(m.abatePrincipal) : '<span class="muted">—</span>'}</td>
+      <td class="num">${brl(m.principal)}</td>
+      <td class="num pos">${brl(m.juros)}</td>
+      <td class="num"><b>${brl(m.saldo)}</b></td></tr>`).join('')}
+    </tbody></table></div>
+    <div class="agpe">${linhas.length} mês(es) desde ${fmtBR(s.inicio)}. Clique em "Dia a dia" para ver linha por linha, como na planilha.</div></div>`;
+}
+
+function crTabelaDia(s) {
+  const linhas = crSoMov ? s.linhas.filter(l => l.eventos.length) : s.linhas;
+  const corte = 700;
+  const mostra = linhas.slice(-corte);
+  return `<div class="panel"><div class="panel-head"><h2>Correção dia a dia<small>uma linha por dia: o saldo de ontem rende hoje</small></h2></div>
+    <div class="tbl-scroll" style="max-height:62vh"><table><thead><tr>
+      <th>Data</th><th class="num">Correção</th><th class="num">Enviado</th><th class="num">Recebido</th>
+      <th class="num">Principal</th><th class="num">Juros</th><th class="num">Saldo</th><th>Movimento</th></tr></thead>
+    <tbody>${mostra.map(l => `<tr class="${l.eventos.length ? 'crmov' : ''}">
+      <td>${fmtBR(l.data)}</td>
+      <td class="num pos">${l.correcao > .005 ? brl(l.correcao) : '<span class="muted">—</span>'}</td>
+      <td class="num">${l.debito > .005 ? brl(l.debito) : '<span class="muted">—</span>'}</td>
+      <td class="num">${l.credito > .005 ? brl(l.credito) : '<span class="muted">—</span>'}</td>
+      <td class="num">${brl(l.principal)}</td>
+      <td class="num pos">${brl(l.juros)}</td>
+      <td class="num"><b>${brl(l.saldo)}</b></td>
+      <td style="font-size:11px">${l.eventos.map(e => e.apropriado
+      ? `<span class="chip chip-ok">apropriado ${brl(e.apropriado)}</span>`
+      : `<span class="chip ${e.debito ? 'chip-n' : 'chip-ok'}">${esc(e.rotulo)}</span>`).join(' ')}
+        ${l.abateJuros > .005 ? `<i class="muted" style="font-style:normal">abateu ${brl(l.abateJuros)} de juros${l.abatePrincipal > .005 ? ` e ${brl(l.abatePrincipal)} de principal` : ''}</i>` : ''}</td></tr>`).join('')}
+    </tbody></table></div>
+    <div class="agpe">${linhas.length > corte ? `Mostrando os últimos ${corte} de ${linhas.length} dias. ` : ''}
+      Mesma conta da planilha de correção: saldo de ontem × ${fmtTaxa(s.taxa)}% ÷ 30, composto dia a dia.</div></div>`;
 }
 
 /* =========================================================================
