@@ -376,6 +376,12 @@ tr.apoff .inl{opacity:.7}
 .barra .j{background:var(--warn)}
 .barra .p{background:var(--acc)}
 tr.crmov{background:var(--raise)}
+/* realce temporario de quem chegou vindo de outra tela */
+@keyframes piscada{0%,100%{background:transparent}30%,70%{background:color-mix(in srgb,var(--acc) 26%,transparent)}}
+tr.pisca{animation:piscada 1.6s ease-in-out 2}
+.crorig{font-size:10px;color:var(--mut);font-style:normal}
+.chip.clicavel{cursor:pointer}
+.chip.clicavel:hover{filter:brightness(1.35)}
 tr.crmov td{border-bottom-color:var(--line)}
 .agpe{font-size:11.5px;color:var(--mut);margin-top:8px;text-align:center}
 .agpe b{color:var(--dim)}
@@ -866,6 +872,33 @@ tr.crmov td{border-bottom-color:var(--line)}
   <div class="modal-head"><h3>Retornos de antecipação a revisar</h3><button class="modal-x" onclick="closeModal('ovRetornos')">×</button></div>
   <div class="modal-body" id="rtCorpo"></div>
   <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal('ovRetornos')">Fechar</button></div>
+</div></div>
+
+<!-- ===================== Acerto de juros ===================== -->
+<div class="overlay" id="ovAcerto"><div class="modal">
+  <div class="modal-head"><h3 id="acTit">Acertar juros</h3><button class="modal-x" onclick="closeModal('ovAcerto')">×</button></div>
+  <div class="modal-body">
+    <div class="alert">Serve para perdoar juro, corrigir um cálculo combinado com o cliente
+      ou zerar a correção de um período. O caixa nunca se move: o que muda é quanto de juro
+      você reconhece como direito.</div>
+    <div class="field"><label>Acertar até</label><input type="date" id="ac_ate" onchange="acCalc()"></div>
+    <div class="field" id="ac_corridoWrap"><label>Juros corridos a reconhecer</label>
+      <div class="fgrid">
+        <div><input type="number" step="0.01" min="0" id="ac_corrido" oninput="acEditou('corrido')"></div>
+        <div><button class="btn btn-sm" onclick="acZerar('corrido')">Zerar</button></div>
+      </div>
+      <div class="hint">Vem do cálculo até a data. Zerar aqui perdoa o juro do período, sem mexer no resultado.</div></div>
+    <div class="field" id="ac_parcelaWrap"><label>Parcela de juros já reconhecida</label>
+      <div class="fgrid">
+        <div><input type="number" step="0.01" min="0" id="ac_parcela" oninput="acEditou('parcela')"></div>
+        <div><button class="btn btn-sm" onclick="acZerar('parcela')">Zerar</button></div>
+      </div>
+      <div class="hint">Mexer aqui estorna receita que já foi reconhecida, e o estorno aparece no razão.</div></div>
+    <div class="memo" id="ac_memo"></div>
+    <div class="erro" id="ac_erro"></div>
+  </div>
+  <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal('ovAcerto')">Cancelar</button>
+    <button class="btn btn-gold" onclick="salvarAcerto()">Acertar</button></div>
 </div></div>
 
 <!-- ===================== Cliente ===================== -->
@@ -2012,7 +2045,7 @@ VIEWS.razao = function () {
     const c = contaDaMov(m), sv = servicoDaMov(m);
     const marca = c.grupo === 'Movimentação Patrimonial' ? '' :
       `<span class="smini s-${sv} ${m.servico ? 'prop' : ''}" title="${m.servico ? 'Marcado neste lançamento' : 'Veio da conta ' + esc(c.nome)}">${SERV_CURTO[sv]}</span>`;
-    return `<tr>
+    return `<tr data-mov="${m.id}">
       <td>${fmtBR(m.data)}</td>
       ${geral ? `<td>${fonteTag(m.fonte)}</td>` : ''}
       <td><span class="chip ${c.grupo === 'Receitas' ? 'chip-ok' : c.grupo === 'Despesas' ? 'chip-bad' : 'chip-n'}">${esc(c.nome)}</span>${marca}</td>
@@ -5978,9 +6011,14 @@ function extratoHTML(p) {
    ========================================================================= */
 let crCli = null, crAte = null, crGrao = 'MES', crSoMov = false;
 
-const crClientes = () => [...new Set(tits()
-  .filter(t => fontesDoFiltro().includes(t.fonte) && t.tipo !== 'JUROS')
-  .map(t => t.cliente).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+/* Correção é o controle do recurso na rua, e recurso na rua é antecipação.
+   Título de cliente tem deságio e vencimento próprios: o dinheiro nunca foi
+   emprestado, foi comprado com desconto. Misturar os dois faria a série
+   corrigir uma dívida que não existe. */
+const crAntecipacoes = fs => tits().filter(t => t.tipo === 'ANTECIPACAO'
+  && (fs || fontesDoFiltro()).includes(t.fonte));
+const crClientes = () => [...new Set(crAntecipacoes().map(t => t.cliente).filter(Boolean))]
+  .sort((a, b) => a.localeCompare(b, 'pt-BR'));
 
 /* Quanto saiu de fato para o cliente, e quando.
    Antecipação lançada pelo sistema tem a saída no razão. A que veio da
@@ -5990,41 +6028,57 @@ const crClientes = () => [...new Set(tits()
 function crEventos(cliente, fs) {
   const fontes = fs || fontesDoFiltro();
   const ev = [];
-  const meus = tits().filter(t => t.cliente === cliente && fontes.includes(t.fonte)
-    && t.tipo !== 'JUROS' && !ehCaptacao(t));
+  const meus = crAntecipacoes(fontes).filter(t => t.cliente === cliente);
 
   meus.forEach(t => {
+    // Toda saída e toda entrada da série apontam para uma linha do razão.
     const envio = movs().find(m => m.tituloId === t.id
-      && (m.tipo === 'ANTECIPACAO_ENVIO' || m.tipo === 'OPERACAO') && (m.saida || 0) > 0);
+      && m.tipo === 'ANTECIPACAO_ENVIO' && (m.saida || 0) > 0);
     if (envio) {
-      ev.push({ data: envio.data, debito: envio.saida, credito: 0, t, rotulo: crRotulo(t), origem: 'razão' });
+      ev.push({ data: envio.data, debito: envio.saida, credito: 0, t,
+                rotulo: crRotulo(t), movId: envio.id, origem: 'razão' });
     } else {
+      // Antecipação que veio da planilha não tem lançamento de envio: o efeito
+      // de caixa já estava no saldo inicial da fonte. Ela entra na série, mas
+      // marcada, porque não tem linha de razão para abrir.
       const amortizado = parciaisDe(t.id).reduce((s, m) => s + (m.amortizado || 0), 0);
       const base = +((t.valor || 0) + amortizado - (t.jurosSomados || 0)).toFixed(2);
       if (base > .005)
-        ev.push({ data: t.dataEntrada, debito: base, credito: 0, t, rotulo: crRotulo(t), origem: 'abertura' });
+        ev.push({ data: t.dataEntrada, debito: base, credito: 0, t,
+                  rotulo: crRotulo(t), movId: null, origem: 'abertura' });
     }
-    // tudo que voltou, parcial ou total
     movs().filter(m => m.tituloId === t.id && (m.entrada || 0) > 0).forEach(m => {
-      ev.push({ data: m.data, debito: 0, credito: m.entrada, t, rotulo: crRotulo(t), origem: m.parcial ? 'parcial' : 'baixa' });
+      ev.push({ data: m.data, debito: 0, credito: m.entrada, t, rotulo: crRotulo(t),
+                movId: m.id, origem: m.parcial ? 'parcial' : 'baixa' });
     });
   });
 
-  // a parcela de juros não é dívida nova: ela é a correção já reconhecida.
-  // Entra só como marcação, para a linha do dia dizer o que aconteceu.
-  tits().filter(t => t.cliente === cliente && fontes.includes(t.fonte) && t.tipo === 'JUROS')
-    .forEach(t => (t.composicao || []).forEach(r => {
-      ev.push({ data: r.ate, debito: 0, credito: 0, apropriado: r.valor, t, rotulo: 'Apropriação', origem: 'apropriacao' });
-      // o que o cliente pagou dessa parcela abate a dívida como qualquer crédito
-    }));
-  tits().filter(t => t.cliente === cliente && fontes.includes(t.fonte) && t.tipo === 'JUROS')
-    .forEach(t => movs().filter(m => m.tituloId === t.id && (m.entrada || 0) > 0)
-      .forEach(m => ev.push({ data: m.data, debito: 0, credito: m.entrada, t, rotulo: 'Parcela de juros', origem: m.parcial ? 'parcial' : 'baixa' })));
+  // A parcela de juros não é dívida nova: é a correção já reconhecida. Entra
+  // como marcação, e o que o cliente pagar dela abate como qualquer crédito.
+  const parcelas = tits().filter(t => t.cliente === cliente && fontes.includes(t.fonte) && t.tipo === 'JUROS');
+  parcelas.forEach(t => {
+    (t.composicao || []).forEach(r => ev.push({
+      data: r.ate, debito: 0, credito: 0, apropriado: r.valor, t,
+      rotulo: 'Apropriação', movId: null, origem: 'apropriacao' }));
+    movs().filter(m => m.tituloId === t.id && (m.entrada || 0) > 0).forEach(m => ev.push({
+      data: m.data, debito: 0, credito: m.entrada, t, rotulo: 'Parcela de juros',
+      movId: m.id, origem: m.parcial ? 'parcial' : 'baixa' }));
+  });
 
   return ev.filter(e => e.data).sort((a, b) => a.data.localeCompare(b.data));
 }
 const crRotulo = t => t.tipo === 'ANTECIPACAO' ? numAntLabel(t.numAntecipacao)
   : t.nf ? 'NF ' + t.nf : TIPO_LABEL[t.tipo] || 'Título';
+/* Abre no razão a linha que originou o movimento. */
+function crAbrirMov(movId) {
+  const m = DB.movs.find(x => x.id === movId); if (!m) return;
+  mesAtivo = mesDe(m.data);
+  go('razao');
+  setTimeout(() => {
+    const el2 = document.querySelector(`[data-mov="${movId}"]`);
+    if (el2) { el2.scrollIntoView({ block: 'center' }); el2.classList.add('pisca'); }
+  }, 80);
+}
 
 /* A série dia a dia, no modelo da planilha. O crédito abate juros primeiro
    e só depois o principal, que é a ordem que ele usa na cobrança. */
@@ -6078,10 +6132,9 @@ function crSerie(cliente, ate, fs) {
 
 /* A taxa do cliente: a dos títulos dele, quando todos usam a mesma. */
 function crTaxa(cliente, fs) {
-  const fontes = fs || fontesDoFiltro();
-  const ts = tits().filter(t => t.cliente === cliente && fontes.includes(t.fonte) && t.tipo !== 'JUROS');
+  const ts = crAntecipacoes(fs).filter(t => t.cliente === cliente);
   const taxas = [...new Set(ts.map(taxaDa))];
-  return taxas.length === 1 ? taxas[0] : (taxas.length ? taxas[0] : taxaPadrao());
+  return taxas.length ? taxas[0] : taxaPadrao();
 }
 
 /* ---------- Tela ---------- */
@@ -6114,6 +6167,7 @@ VIEWS.correcao = function () {
     </div>
     <label style="font-size:12.5px;color:var(--dim)"><input type="checkbox" ${crSoMov ? 'checked' : ''}
       onchange="crMuda('somov', this.checked)"> só dias com movimento</label>
+    <button class="btn btn-sm" onclick="abrirAcerto()">⧗ Acertar juros</button>
     <button class="btn btn-sm right" onclick="abrirExtrato('${esc(crCli).replace(/'/g, "\\'")}')">Extrato</button></div>`;
 
   if (!s.linhas.length) return filtros + `<div class="empty">Sem movimento de ${esc(crCli)} até ${fmtBR(ate)}.</div>`;
@@ -6129,7 +6183,19 @@ VIEWS.correcao = function () {
       <div class="sub">${brl(s.pagoJuros)} em juros, ${brl(s.pagoPrincipal)} em principal</div></div>
   </div>`;
 
-  return filtros + stats + crAmortizacao(s) +
+  // Toda entrada e toda saída da série apontam para uma linha do razão. As que
+  // vieram da abertura não têm, e isso precisa ficar dito: são as antecipações
+  // importadas da planilha, cujo efeito de caixa já estava no saldo inicial.
+  const semLastro = s.ev.filter(e => e.origem === 'abertura');
+  const aviso = semLastro.length ? `<div class="alert">
+      <b>${semLastro.length} envio(s) desta série não têm lançamento no razão</b>,
+      somando ${brl(semLastro.reduce((a, e) => a + e.debito, 0))}.
+      São antecipações que vieram da planilha: o dinheiro saiu antes da abertura do sistema,
+      e o efeito já está no saldo inicial da fonte. Elas contam na correção e aparecem marcadas
+      como <span class="chip chip-warn">abertura</span>.
+      Todo o resto abre no razão com um clique.</div>` : '';
+
+  return filtros + stats + aviso + crAmortizacao(s) +
     (crGrao === 'DIA' ? crTabelaDia(s) : crTabelaMes(s));
 };
 
@@ -6210,11 +6276,171 @@ function crTabelaDia(s) {
       <td class="num"><b>${brl(l.saldo)}</b></td>
       <td style="font-size:11px">${l.eventos.map(e => e.apropriado
       ? `<span class="chip chip-ok">apropriado ${brl(e.apropriado)}</span>`
-      : `<span class="chip ${e.debito ? 'chip-n' : 'chip-ok'}">${esc(e.rotulo)}</span>`).join(' ')}
+      : e.movId
+        ? `<span class="chip ${e.debito ? 'chip-n' : 'chip-ok'} clicavel" title="Abrir no razão"
+             onclick="crAbrirMov('${e.movId}')">${esc(e.rotulo)} ↗</span>`
+        : `<span class="chip ${e.debito ? 'chip-n' : 'chip-ok'}">${esc(e.rotulo)}</span>
+           <span class="chip chip-warn" title="Sem lançamento no razão: veio da abertura">abertura</span>`).join(' ')}
         ${l.abateJuros > .005 ? `<i class="muted" style="font-style:normal">abateu ${brl(l.abateJuros)} de juros${l.abatePrincipal > .005 ? ` e ${brl(l.abatePrincipal)} de principal` : ''}</i>` : ''}</td></tr>`).join('')}
     </tbody></table></div>
     <div class="agpe">${linhas.length > corte ? `Mostrando os últimos ${corte} de ${linhas.length} dias. ` : ''}
       Mesma conta da planilha de correção: saldo de ontem × ${fmtTaxa(s.taxa)}% ÷ 30, composto dia a dia.</div></div>`;
+}
+
+
+/* ---------- Acerto de juros ----------
+   Duas coisas que a conta não decide sozinha: perdoar o juro que correu e
+   ainda não foi reconhecido, e mexer no valor de uma parcela de juros que já
+   virou receita. A primeira não toca no resultado, porque aquele juro nunca
+   entrou nele. A segunda toca, e por isso lança o estorno: receita
+   reconhecida que deixa de existir tem que sair do lucro pela porta da
+   frente, não sumir do título. */
+function abrirAcerto() {
+  const fs = fontesDoFiltro(), cli = crCli;
+  if (!cli) return toast('Escolha um cliente');
+  limpaErro('ac_erro');
+  setVal('ac_ate', crAte || hoje());
+  el('acTit').textContent = `Acertar juros — ${cli}`;
+  acCalc();
+  openModal('ovAcerto');
+}
+
+function acDados() {
+  const fs = fontesDoFiltro(), cli = crCli, ate = val('ac_ate') || hoje();
+  const abertas = crAntecipacoes(fs).filter(t => t.cliente === cli && emAberto(t));
+  const corridos = abertas.map(t => ({ t, ...jurosAApropriar(t, ate) })).filter(x => x.dias > 0);
+  const aCorrer = +corridos.reduce((s, x) => s + x.efeito, 0).toFixed(2);
+  const parcelas = tits().filter(t => t.cliente === cli && fs.includes(t.fonte)
+    && t.tipo === 'JUROS' && emAberto(t));
+  const apropriado = +parcelas.reduce((s, t) => s + (t.valor || 0), 0).toFixed(2);
+  return { cli, ate, abertas, corridos, aCorrer, parcelas, apropriado };
+}
+
+function acCalc() {
+  const d = acDados();
+  if (!el('ac_corridoWrap')) return;
+  el('ac_corridoWrap').style.display = d.corridos.length ? 'block' : 'none';
+  el('ac_parcelaWrap').style.display = d.parcelas.length ? 'block' : 'none';
+  if (!acTocado.corrido) setVal('ac_corrido', d.aCorrer.toFixed(2));
+  if (!acTocado.parcela) setVal('ac_parcela', d.apropriado.toFixed(2));
+
+  const novoCorrido = num(val('ac_corrido')) || 0;
+  const novaParcela = num(val('ac_parcela')) || 0;
+  const perdoado = +(d.aCorrer - novoCorrido).toFixed(2);
+  const estorno = +(novaParcela - d.apropriado).toFixed(2);
+
+  el('ac_memo').innerHTML = `
+    <div class="l"><span>Juros corridos até ${fmtBR(d.ate)}, ainda não reconhecidos</span><span class="pos">${brl(d.aCorrer)}</span></div>
+    <div class="l"><span>Vai reconhecer</span><span>${brl(novoCorrido)}</span></div>
+    ${Math.abs(perdoado) > .005 ? `<div class="l"><span>${perdoado > 0 ? 'Perdoado' : 'Cobrado a mais'}</span>
+      <span class="${perdoado > 0 ? 'warntxt' : 'pos'}">${brl(perdoado)}</span></div>` : ''}
+    ${d.parcelas.length ? `<div class="l"><span>Parcela de juros já reconhecida</span><span>${brl(d.apropriado)}</span></div>
+      <div class="l"><span>Passa a valer</span><span>${brl(novaParcela)}</span></div>` : ''}
+    <div class="l tot"><span>Efeito no resultado</span>
+      <span class="${(novoCorrido + estorno) < 0 ? 'neg' : 'pos'}">${brl(novoCorrido + estorno)}</span></div>
+    <div class="conta">Perdoar juro corrido não mexe no resultado: ele nunca entrou.
+      ${Math.abs(estorno) > .005 ? `Mexer na parcela mexe, porque aquilo já era receita — por isso ${estorno < 0 ? 'o estorno de ' + brl(-estorno) + ' sai do lucro' : 'a diferença de ' + brl(estorno) + ' entra no lucro'}.`
+      : 'A parcela já reconhecida fica como está.'}
+      Em qualquer caso o caixa não se move, e os juros passam a contar de ${fmtBR(d.ate)} em diante.</div>`;
+  el('ac_memo').classList.add('show');
+}
+let acTocado = { corrido: false, parcela: false };
+function acEditou(qual) { acTocado[qual] = true; acCalc(); }
+function acZerar(qual) {
+  setVal(qual === 'corrido' ? 'ac_corrido' : 'ac_parcela', '0');
+  acTocado[qual] = true; acCalc();
+}
+
+function salvarAcerto() {
+  limpaErro('ac_erro');
+  const d = acDados();
+  const novoCorrido = num(val('ac_corrido')) || 0;
+  const novaParcela = num(val('ac_parcela')) || 0;
+  if (novoCorrido < 0 || novaParcela < 0) return erro('ac_erro', 'Os valores não podem ser negativos.');
+  if (mesFechado(mesDe(d.ate)))
+    return erro('ac_erro', `${mesLabel(mesDe(d.ate))} está fechado. Reabra em Fechamento ou escolha outra data.`);
+
+  const estorno = +(novaParcela - d.apropriado).toFixed(2);
+  const perdoado = +(d.aCorrer - novoCorrido).toFixed(2);
+  if (Math.abs(estorno) < .005 && Math.abs(perdoado) < .005 && novoCorrido < .005)
+    return erro('ac_erro', 'Nada a acertar: os valores estão iguais ao que já está registrado.');
+
+  confirmar(`Acertar os juros de <b>${esc(d.cli)}</b> até ${fmtBR(d.ate)}?`
+    + (Math.abs(perdoado) > .005 ? `<br><br>${perdoado > 0 ? 'Perdoa' : 'Cobra a mais'} <b>${brl(Math.abs(perdoado))}</b> de juro corrido.` : '')
+    + (novoCorrido > .005 ? `<br><br>Reconhece <b>${brl(novoCorrido)}</b> na parcela de juros.` : '')
+    + (Math.abs(estorno) > .005 ? `<br><br>Muda a parcela já reconhecida em <b>${brl(estorno)}</b>, e isso ${estorno < 0 ? 'sai do' : 'entra no'} resultado.` : '')
+    + `<br><br>O caixa não se move.`, () => {
+
+    const fs = fontesDoFiltro();
+    // 1) a parcela já reconhecida muda de valor, com estorno no resultado
+    if (Math.abs(estorno) > .005 && d.parcelas.length) {
+      const alvo = d.parcelas[0];
+      alvo.valor = +(alvo.valor + estorno).toFixed(2);
+      alvo.obs = (alvo.obs ? alvo.obs + ' | ' : '') + `Acerto manual em ${fmtBR(d.ate)}`;
+      // parcela zerada não é parcela: sai da lista em vez de ficar como
+      // linha de zero real. O valor já é zero, então a conciliação não sente.
+      if (Math.abs(alvo.valor) < .005) {
+        alvo.status = 'CANCELADO'; alvo.dataReceb = d.ate; alvo.valorRecebido = 0;
+      }
+      const conta = contaPorChave(estorno < 0 ? 'despesa_ajuste' : 'receita_ajuste');
+      DB.movs.push({
+        id: uid(), seq: proximaSeq(), fonte: alvo.fonte, data: d.ate, tipo: 'AJUSTE',
+        descricao: `Acerto de juros — ${d.cli}`, cliente: d.cli, tituloId: alvo.id, operacaoId: null,
+        entrada: null, saida: null, resultado: estorno,
+        contaId: conta ? conta.id : null, servico: null,
+        obs: 'Acerto manual da parcela de juros', deletedAt: null
+      });
+    }
+    // 2) o juro corrido vira parcela pelo valor escolhido (zero = perdoado)
+    if (novoCorrido > .005) {
+      const porFonte = {};
+      d.corridos.forEach(x => {
+        const peso = d.aCorrer > 0 ? x.efeito / d.aCorrer : 1 / d.corridos.length;
+        porFonte[x.t.fonte] = +((porFonte[x.t.fonte] || 0) + novoCorrido * peso).toFixed(2);
+      });
+      Object.entries(porFonte).forEach(([fonte, valor]) => {
+        if (Math.abs(valor) < .005) return;
+        const chave = 'receita_retorno_antecipacao', conta = contaPorChave(chave);
+        const aberta = tits().find(t => t.tipo === 'JUROS' && emAberto(t)
+          && t.cliente === d.cli && t.fonte === fonte && (t.contaId || null) === (conta ? conta.id : null));
+        const rodada = { ate: d.ate, valor, lote: null, manual: true,
+          itens: d.corridos.filter(x => x.t.fonte === fonte).map(x => ({
+            tituloId: x.t.id, tipo: x.t.tipo, num: x.t.numAntecipacao || null, nf: x.t.nf || '',
+            enviadaEm: x.t.dataEntrada, base: +(x.t.valor || 0).toFixed(2),
+            desde: x.desde, dias: x.dias, taxa: x.taxa, juros: +x.efeito.toFixed(2) })) };
+        if (aberta) {
+          aberta.valor = +(aberta.valor + valor).toFixed(2);
+          aberta.dataVenc = d.ate;
+          aberta.composicao = (aberta.composicao || []).concat([rodada]);
+        } else {
+          DB.titulos.push({
+            id: uid(), fonte, cliente: d.cli, sacado: '', tipo: 'JUROS', nf: '', emissao: 'NA',
+            dataEntrada: d.ate, dataVenc: d.ate, valorBruto: null, valorLiquido: null,
+            valor, status: 'A_VENCER', dataReceb: null, valorRecebido: null,
+            contaId: conta ? conta.id : null, composicao: [rodada],
+            obs: `Juros acertados à mão até ${fmtBR(d.ate)}`,
+            operacaoId: null, numAntecipacao: null, taxaMensal: null, jurosAte: null, deletedAt: null
+          });
+        }
+        DB.movs.push({
+          id: uid(), seq: proximaSeq(), fonte, data: d.ate, tipo: 'JUROS',
+          descricao: `${conta ? conta.nome : 'Juros'} — ${d.cli} até ${fmtBR(d.ate)}`,
+          cliente: d.cli, tituloId: null, operacaoId: null,
+          entrada: null, saida: null, resultado: valor,
+          contaId: conta ? conta.id : null, servico: null,
+          obs: 'Juros reconhecidos por competência', deletedAt: null
+        });
+      });
+    }
+    // 3) o relógio anda em qualquer caso: daqui para frente conta do zero
+    d.abertas.forEach(t => { t.jurosAte = d.ate; });
+
+    save(); closeModal('ovAcerto'); render();
+    acTocado = { corrido: false, parcela: false };
+    toast(perdoado > .005 && novoCorrido < .005
+      ? `Juros de ${d.cli} zerados até ${fmtBR(d.ate)}`
+      : `Juros de ${d.cli} acertados até ${fmtBR(d.ate)}`);
+  }, 'Acertar juros');
 }
 
 /* =========================================================================
