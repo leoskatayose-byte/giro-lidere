@@ -380,6 +380,11 @@ tr.crmov{background:var(--raise)}
 @keyframes piscada{0%,100%{background:transparent}30%,70%{background:color-mix(in srgb,var(--acc) 26%,transparent)}}
 tr.pisca{animation:piscada 1.6s ease-in-out 2}
 .crorig{font-size:10px;color:var(--mut);font-style:normal}
+.ac-senha{position:relative;display:flex;align-items:center}
+.ac-senha input{padding-right:70px;width:100%}
+.ac-olho{position:absolute;right:8px;background:none;border:0;color:var(--mut);font-size:11px;
+  cursor:pointer;padding:4px 6px;border-radius:5px}
+.ac-olho:hover{color:var(--acc);background:var(--raise)}
 .chip.clicavel{cursor:pointer}
 /* Grade da correção: mesma leitura da planilha, com a coluna do saldo puxando
    o olho e o dia sem movimento quase apagado. */
@@ -1234,6 +1239,15 @@ function limpaErro(id) { document.getElementById(id).classList.remove('show'); }
    O botão é substituído a cada chamada e volta a ser inerte ao fechar: senão
    o callback da confirmação cancelada continuaria pendurado, e um clique
    depois executaria a ação que a pessoa acabou de recusar. */
+/* ===== Perfil de acesso =====
+   No arquivo local não há perfis: quem abriu o arquivo é dono dele. Na nuvem,
+   src/12-nuvem.js reatribui estas três funções conforme o papel do usuário.
+   São `let` e não `const` justamente para isso. */
+let podeEditar = () => true;
+let souAdmin = () => true;
+let travado = () => false;
+let travadoAdmin = () => false;
+
 function confirmar(msg, fn, titulo) {
   document.getElementById('cf_tit').textContent = titulo || 'Confirmar';
   document.getElementById('cf_msg').innerHTML = msg;
@@ -6908,6 +6922,73 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') document.que
 if (!MODO_NUVEM) { load(); render(); }
 
 /* =========================================================================
+   Permissão na tela
+
+   A regra de verdade está no banco: a RLS e a função giro_gravar recusam
+   gravação de quem tem perfil de consulta, e nenhum truque no navegador passa
+   por cima disso. O que esta camada faz é outra coisa — evitar que a pessoa
+   preencha um formulário inteiro para descobrir no fim que não podia. Bloquear
+   no botão não é segurança; é cortesia.
+
+   Em vez de espalhar `if (travado()) return` por cinquenta funções, as funções
+   que gravam são embrulhadas pelo nome. Assim a lista fica visível num lugar
+   só, e quem criar uma tela nova lembra de acrescentar a dela aqui.
+   ========================================================================= */
+
+/* Abre formulário ou grava: exige perfil Financeiro ou Administrador. */
+const ACOES_ESCRITA = [
+  'abrirLanc', 'abrirOper', 'abrirAnt', 'abrirTitulo', 'abrirReceb', 'abrirProrrog',
+  'abrirPerda', 'abrirAporte', 'abrirApropriar', 'abrirAcerto', 'abrirRateio',
+  'abrirTransf', 'abrirReclass', 'abrirCliente', 'abrirSacado', 'abrirConta',
+  'abrirRetornos', 'abrirImport',
+  'salvarLanc', 'salvarOper', 'salvarAnt', 'salvarTitulo', 'salvarReceb', 'salvarProrrog',
+  'salvarPerda', 'salvarAporte', 'salvarApropriar', 'salvarAcerto', 'salvarRateio',
+  'salvarTransf', 'salvarReclass', 'salvarCliente', 'salvarSacado', 'salvarConta',
+  'salvarTaxas', 'setFonteVal',
+  'excluirLanc', 'excluirOper', 'excluirAnt', 'excluirTitulo', 'excluirCliente',
+  'excluirSacado', 'excluirConta', 'desfazerBaixa', 'desfazerParcial', 'desfazerPerda',
+  'desfazerApropriacao', 'desfazerApropriacaoAntiga', 'desfazerRateio',
+  'rtCorrigir', 'rtCorrigirTodos', 'alternarFechamento', 'cgAlternarPago',
+  'restaurar', 'importData', 'apMarcar', 'apTaxaTodos'
+];
+
+/* Só o administrador: mexe em quem acessa, no que foi excluído e no backup. */
+const ACOES_ADMIN = ['restaurar', 'importData', 'purgar', 'esvaziarLixeira', 'exportData'];
+
+(function ligarPermissoes() {
+  // A guarda é consultada na hora da chamada, não na hora do embrulho: na
+  // nuvem, quem sabe o perfil é o login, que acontece depois deste código.
+  const embrulha = (nome, qual, rotulo) => {
+    const orig = window[nome];
+    if (typeof orig !== 'function') return;
+    window[nome] = function () {
+      const guarda = qual === 'admin' ? travadoAdmin : travado;
+      if (guarda(rotulo)) return;
+      return orig.apply(this, arguments);
+    };
+  };
+  ACOES_ESCRITA.forEach(n => embrulha(n, 'escrita', 'alterar registros'));
+  ACOES_ADMIN.forEach(n => embrulha(n, 'admin', nomeAdmin(n)));
+})();
+
+function nomeAdmin(n) {
+  return n === 'exportData' ? 'Baixar o backup da empresa'
+    : n === 'restaurar' || n === 'importData' ? 'Restaurar backup'
+      : n === 'purgar' || n === 'esvaziarLixeira' ? 'Excluir em definitivo'
+        : 'Essa ação';
+}
+
+/* A tela diz o perfil, para ninguém ficar procurando o botão que não existe. */
+function faixaPerfil() {
+  if (podeEditar() && souAdmin()) return '';
+  return `<div class="perfilfaixa ${podeEditar() ? '' : 'leitura'}">
+    ${podeEditar()
+      ? 'Perfil <b>Financeiro</b>: você lança, recebe e cadastra. Usuários, backup e exclusões definitivas são do administrador.'
+      : 'Perfil <b>Consulta</b>: você vê e imprime tudo, mas não altera nada. Peça ao administrador se precisar lançar.'}
+  </div>`;
+}
+
+/* =========================================================================
    FASE 2 — nuvem: login, aprovação e gravação no Supabase
    Esta parte só entra no build da nuvem (dist/nuvem/index.html). Nenhuma view
    foi alterada para isso: o que muda é apenas a camada de gravação, que era o
@@ -6917,6 +6998,32 @@ const SB_URL = 'https://cwskkoiqikjvvanyltrr.supabase.co';
 const SB_KEY = 'sb_publishable_zRU6_fF48f0GvccPY7pRYw_Utz8K9Z9';
 const TABELA = 'giro_state';
 let sb = null, ME = null, PERFIL = null, salvando = false, pendente = false, canal = null;
+/* A versão do estado que este navegador leu. Gravar só vale se ela ainda for a
+   do banco: é isso que impede duas pessoas editando ao mesmo tempo de uma
+   apagar o trabalho da outra sem ninguém perceber. */
+let VERSAO = 0, emConflito = false;
+
+/* ---------- Perfis ----------
+   admin      configura, administra usuários, baixa e restaura backup, exclui
+   financeiro lança, recebe, cadastra — o dia a dia
+   consulta   lê e imprime, não altera nada
+   A regra vale no banco (RLS e a função giro_gravar); aqui ela existe para a
+   tela não oferecer o que vai ser recusado. */
+const papelAtual = () => (PERFIL && (PERFIL.papel || (PERFIL.is_admin ? 'admin' : 'financeiro'))) || 'consulta';
+const PAPEL_NOME = { admin: 'Administrador', financeiro: 'Financeiro', consulta: 'Consulta' };
+souAdmin = () => papelAtual() === 'admin';
+podeEditar = () => papelAtual() !== 'consulta';
+/* Usado no começo de toda ação que grava. */
+travado = function (oQue) {
+  if (podeEditar()) return false;
+  toast(`Seu acesso é de consulta: ${oQue || 'essa ação'} é de quem tem perfil Financeiro.`);
+  return true;
+};
+travadoAdmin = function (oQue) {
+  if (souAdmin()) return false;
+  toast(`${oQue || 'Essa ação'} é do administrador.`);
+  return true;
+};
 
 /* ---------- Tela de acesso ---------- */
 function telaAcesso(estado, msg) {
@@ -6928,8 +7035,11 @@ function telaAcesso(estado, msg) {
   if (estado === 'analise') {
     box.innerHTML = `<div class="ac-card"><div class="ac-logo">${LOGO_SVG}</div>
       <h2>Cadastro em análise</h2>
-      <p>Sua conta foi criada e o e-mail confirmado. Falta a liberação de um administrador —
-      é ele quem decide quem enxerga os números da empresa.</p>
+      <p>Sua conta foi criada e o e-mail confirmado. Falta a liberação de um administrador:
+      ele recebe o pedido na tela de usuários, confere quem é você e escolhe o seu perfil
+      (Financeiro, que lança e recebe, ou Consulta, que só lê).</p>
+      <p class="ac-mut">Enquanto isso você não enxerga nenhum dado da empresa.
+      Se demorar, fale com quem administra o sistema: bpo@prosperesec.com.br</p>
       <p class="ac-mut">Entrou como <b>${esc((ME && ME.email) || '')}</b>.</p>
       <div class="ac-acts"><button class="btn" onclick="recarregarPerfil()">Já fui liberado</button>
         <button class="btn btn-ghost" onclick="sair()">Sair</button></div></div>`;
@@ -6937,31 +7047,77 @@ function telaAcesso(estado, msg) {
   }
   const cadastro = estado === 'cadastro';
   box.innerHTML = `<div class="ac-card"><div class="ac-logo">${LOGO_SVG}</div>
-    <h2>${cadastro ? 'Criar acesso' : 'Entrar'}</h2>
+    <h2>${cadastro ? 'Solicitar acesso' : 'Entrar'}</h2>
     <p>Sistema Lidere · capital de giro e recurso próprio</p>
     <div class="field"><label>E-mail</label><input id="ac_email" type="email" autocomplete="username"></div>
-    <div class="field"><label>Senha</label><input id="ac_senha" type="password"
-      autocomplete="${cadastro ? 'new-password' : 'current-password'}"
-      onkeydown="if(event.key==='Enter')${cadastro ? 'criarConta()' : 'entrar()'}"></div>
+    <div class="field"><label>Senha</label>
+      <div class="ac-senha"><input id="ac_senha" type="password"
+        autocomplete="${cadastro ? 'new-password' : 'current-password'}"
+        onkeydown="if(event.key==='Enter')${cadastro ? 'criarConta()' : 'entrar()'}">
+        <button type="button" class="ac-olho" aria-label="Mostrar ou ocultar a senha"
+          onclick="verSenha(this)">mostrar</button></div>
+      ${cadastro ? '<div class="hint">Pelo menos 8 caracteres, com letras e números.</div>' : ''}</div>
     ${cadastro ? `<label class="ac-check"><input type="checkbox" id="ac_lgpd">
       <span>Li e aceito o <a href="#" onclick="mostrarPrivacidade();return false">aviso de privacidade</a>:
-      o sistema guarda apenas o meu e-mail para identificar o acesso, em servidor no Brasil.</span></label>` : ''}
+      do meu acesso o sistema guarda o e-mail; dentro dele há dados financeiros e cadastrais
+      de clientes da empresa, inclusive CNPJ, endereço e contato.</span></label>` : ''}
     ${erro}
-    <button class="btn btn-gold ac-btn" onclick="${cadastro ? 'criarConta()' : 'entrar()'}">${cadastro ? 'Criar acesso' : 'Entrar'}</button>
+    <button class="btn btn-gold ac-btn" onclick="${cadastro ? 'criarConta()' : 'entrar()'}">${cadastro ? 'Solicitar acesso' : 'Entrar'}</button>
     <div class="ac-alt">${cadastro
       ? `Já tem acesso? <a href="#" onclick="telaAcesso('login');return false">Entrar</a>`
-      : `Primeiro acesso? <a href="#" onclick="telaAcesso('cadastro');return false">Criar conta</a>
+      : `Primeiro acesso? <a href="#" onclick="telaAcesso('cadastro');return false">Solicitar acesso</a>
          · <a href="#" onclick="recuperarSenha();return false">Esqueci a senha</a>`}</div>
-    <div class="ac-rodape">Dados hospedados no Brasil (São Paulo). Acesso liberado por um administrador.</div>
+    <div class="ac-rodape">Dados hospedados no Brasil (São Paulo). Acesso liberado por um administrador.
+      Dúvidas: bpo@prosperesec.com.br</div>
   </div>`;
   setTimeout(() => { const e = document.getElementById('ac_email'); if (e) e.focus(); }, 60);
 }
+/* O aviso antigo dizia que o sistema guardava "apenas o e-mail". Isso é
+   verdade sobre o usuário e falso sobre o sistema: dentro dele há CNPJ,
+   endereço e contato de clientes e sacados, além de toda a movimentação
+   financeira da empresa. São duas coisas diferentes e precisam ser ditas
+   separadamente — quem aceita um termo tem que saber o que está aceitando. */
 function mostrarPrivacidade() {
-  alert('Aviso de privacidade\n\n' +
-    'O que é coletado: apenas o seu e-mail, para identificar o acesso.\n' +
-    'Onde fica: servidor no Brasil (São Paulo).\n' +
-    'Quem vê: apenas usuários aprovados por um administrador.\n' +
-    'Seus direitos: você pode baixar todos os dados (botão "Baixar backup") e excluir a sua conta a qualquer momento, em Ajustes › Acesso.');
+  alert(
+    'AVISO DE PRIVACIDADE — Sistema Lidere · Capital de Giro\n' +
+    '\n' +
+    '1. SOBRE VOCÊ, QUE ACESSA\n' +
+    'Coletamos o seu e-mail, a data do cadastro, a situação da aprovação e o seu\n' +
+    'perfil de acesso. A senha fica guardada cifrada pelo provedor de autenticação\n' +
+    'e ninguém, nem o administrador, consegue lê-la.\n' +
+    'Registramos também a data e o autor de cada gravação, para saber quem alterou o quê.\n' +
+    '\n' +
+    '2. SOBRE A EMPRESA E OS CLIENTES DELA\n' +
+    'O sistema armazena dados operacionais da Lidere e de terceiros:\n' +
+    '  • clientes e sacados: nome, CPF ou CNPJ, endereço, telefone e e-mail\n' +
+    '  • títulos, antecipações, captações, valores, taxas e vencimentos\n' +
+    '  • lançamentos de caixa, saldos bancários e resultado\n' +
+    'Esses dados não são seus: são da empresa, e você tem acesso a eles porque\n' +
+    'foi autorizado a operar o sistema. Use-os apenas para essa finalidade.\n' +
+    'Nesse tratamento a Lidere é a controladora, e cada usuário aprovado atua\n' +
+    'como operador dentro do que o seu perfil permite.\n' +
+    '\n' +
+    '3. ONDE FICA\n' +
+    'Servidor no Brasil (São Paulo), com acesso restrito a usuários aprovados.\n' +
+    'O arquivo público do sistema não contém dado nenhum: tudo vive no banco,\n' +
+    'atrás de login.\n' +
+    '\n' +
+    '4. SEUS DIREITOS\n' +
+    'Em Ajustes › Acesso você pode baixar os SEUS dados de acesso e excluir a sua\n' +
+    'conta a qualquer momento. Excluir a conta remove o seu acesso; os dados da\n' +
+    'empresa permanecem, porque não são seus.\n' +
+    'O backup completo da empresa é função do administrador.\n' +
+    '\n' +
+    '5. RESPONSÁVEL\n' +
+    'Lidere BPO Financeiro — bpo@prosperesec.com.br'
+  );
+}
+function verSenha(b) {
+  const c = document.getElementById('ac_senha');
+  const ver = c.type === 'password';
+  c.type = ver ? 'text' : 'password';
+  b.textContent = ver ? 'ocultar' : 'mostrar';
+  c.focus();
 }
 async function entrar() {
   const email = document.getElementById('ac_email').value.trim();
@@ -6980,7 +7136,9 @@ async function criarConta() {
   const email = document.getElementById('ac_email').value.trim();
   const senha = document.getElementById('ac_senha').value;
   const ok = document.getElementById('ac_lgpd').checked;
-  if (!email || senha.length < 6) return telaAcesso('cadastro', 'Informe o e-mail e uma senha de pelo menos 6 caracteres.');
+  if (!email) return telaAcesso('cadastro', 'Informe o seu e-mail.');
+  if (senha.length < 8 || !/[a-zA-Z]/.test(senha) || !/[0-9]/.test(senha))
+    return telaAcesso('cadastro', 'A senha precisa de pelo menos 8 caracteres, com letras e números.');
   if (!ok) return telaAcesso('cadastro', 'É preciso aceitar o aviso de privacidade.');
   const { error } = await sb.auth.signUp({ email, password: senha });
   if (error) return telaAcesso('cadastro', error.message);
@@ -7014,8 +7172,10 @@ async function apos_login() {
   ligarRealtime();
 }
 async function carregarNuvem() {
-  const { data, error } = await sb.from(TABELA).select('data').eq('id', 1).maybeSingle();
+  const { data, error } = await sb.from(TABELA).select('data,versao').eq('id', 1).maybeSingle();
   if (error) { toast('Não consegui carregar: ' + error.message); return; }
+  VERSAO = (data && data.versao) || 0;
+  emConflito = false;
   // Banco vazio: o arquivo publicado NÃO traz os dados dentro (ele é público —
   // qualquer visitante leria clientes e saldos sem login). A carga inicial vem
   // do backup JSON, que anda por fora do repositório.
@@ -7052,9 +7212,10 @@ function ligarRealtime() {
   canal = sb.channel('giro')
     .on('postgres_changes', { event: '*', schema: 'public', table: TABELA }, payload => {
       const novo = payload.new || {};
-      if (novo.updated_by === (ME && ME.id)) return;   // eco da própria gravação
+      if (novo.updated_by === (ME && ME.id)) { VERSAO = novo.versao || VERSAO; return; }
       if (!novo.data || !novo.data.movs) return;
-      DB = novo.data; migrar(); aplicaTema(DB.tema); render();
+      DB = novo.data; VERSAO = novo.versao || 0; emConflito = false;
+      migrar(); aplicaTema(DB.tema); render();
       toast('Alterado por outro usuário — tela atualizada');
     }).subscribe();
 }
@@ -7064,21 +7225,68 @@ function ligarRealtime() {
    gravações chegam juntas, a segunda espera a primeira e roda em seguida — sem
    fila infinita, porque o que se grava é sempre o estado inteiro e atual. */
 async function persistir() {
+  if (!podeEditar()) { marcarSync(null, 'somente leitura'); return; }
+  if (emConflito) return;                      // esperando a decisão da pessoa
   if (salvando) { pendente = true; return; }
   salvando = true;
-  const { error } = await sb.from(TABELA).upsert({
-    id: 1, data: DB, updated_at: new Date().toISOString(), updated_by: ME && ME.id
-  });
+  // Grava contando a versão que este navegador leu. Se outro salvou nesse meio
+  // tempo, a função não grava nada e devolve vazio — e aí a pergunta é de quem
+  // está na frente da tela, não do programa.
+  const { data, error } = await sb.rpc('giro_gravar', { p_data: DB, p_versao: VERSAO });
   salvando = false;
-  marcarSync(error);
-  if (error) toast('Não consegui gravar: ' + error.message);
+  if (error) { marcarSync(error); toast('Não consegui gravar: ' + error.message); return; }
+  const linha = Array.isArray(data) ? data[0] : data;
+  if (!linha) { pendente = false; return conflito(); }
+  VERSAO = linha.versao;
+  marcarSync(null);
   if (pendente) { pendente = false; persistir(); }
 }
-function marcarSync(erro) {
+
+/* Alguém gravou antes. Nada se perde em silêncio: a tela para de gravar, mostra
+   o que aconteceu e deixa escolher entre recarregar (descartando o que foi
+   digitado aqui) ou sobrescrever (descartando o que o outro fez). */
+async function conflito() {
+  emConflito = true;
+  marcarSync(true, 'alterado por outro');
+  const { data } = await sb.from(TABELA).select('updated_at,updated_by,versao').eq('id', 1).maybeSingle();
+  let quem = 'outro usuário';
+  if (data && data.updated_by) {
+    const { data: p } = await sb.from('profiles').select('email').eq('id', data.updated_by).maybeSingle();
+    if (p && p.email) quem = p.email;
+  }
+  const quando = data && data.updated_at
+    ? new Date(data.updated_at).toLocaleString('pt-BR') : 'agora há pouco';
+  confirmar(`<b>${esc(quem)}</b> gravou alterações em ${esc(quando)}, depois que esta tela carregou.`
+    + `<br><br>Se continuar, o trabalho dessa pessoa é substituído pelo que está nesta tela.`
+    + `<br>Se recarregar, o que você fez aqui e ainda não gravou é descartado.`
+    + `<br><br>Na dúvida, baixe um backup antes: o botão está na barra lateral.`,
+    () => { emConflito = false; forcarGravacao(); },
+    'Alterado por outro usuário');
+  // o botão de cancelar da confirmação recarrega, que é o caminho seguro
+  const x = document.querySelector('#ovConf .btn-ghost');
+  if (x) x.textContent = 'Recarregar o da nuvem';
+  const ov = document.getElementById('ovConf');
+  if (ov) ov.addEventListener('click', function fecha(e) {
+    if (e.target === ov || e.target.classList.contains('btn-ghost') || e.target.classList.contains('modal-x')) {
+      ov.removeEventListener('click', fecha);
+      emConflito = false; carregarNuvem();
+    }
+  });
+}
+async function forcarGravacao() {
+  const { data, error } = await sb.rpc('giro_gravar', { p_data: DB, p_versao: -1 });
+  if (error) return toast('Não consegui gravar: ' + error.message);
+  const linha = Array.isArray(data) ? data[0] : data;
+  VERSAO = linha ? linha.versao : VERSAO;
+  marcarSync(null);
+  toast('Gravado por cima do que estava na nuvem');
+}
+function marcarSync(erro, texto) {
   const el0 = document.getElementById('syncEstado');
   if (!el0) return;
-  el0.textContent = erro ? '⚠ não gravou' : '✓ salvo na nuvem';
+  el0.textContent = texto ? (erro ? '⚠ ' : '') + texto : (erro ? '⚠ não gravou' : '✓ salvo na nuvem');
   el0.className = 'sync ' + (erro ? 'ruim' : 'ok');
+  if (texto && !erro) return;
   if (!erro) { clearTimeout(window._sy); window._sy = setTimeout(() => { el0.textContent = ''; el0.className = 'sync'; }, 2500); }
 }
 /* A troca da Fase 1 para a Fase 2, em uma linha: save() deixa de ir para o
@@ -7087,37 +7295,97 @@ save = function () { persistir(); };
 
 /* ---------- Administração (só para quem é admin) ---------- */
 VIEWS.acesso = function () {
-  const eu = `<div class="panel"><div class="panel-head"><h2>Seu acesso<small>o sistema guarda apenas o seu e-mail</small></h2></div>
+  const papel = papelAtual();
+  const eu = `<div class="panel"><div class="panel-head"><h2>Seu acesso<small>o que o sistema guarda sobre você, e o que o seu perfil permite</small></h2></div>
     <div class="conc" style="border:none;padding:0 18px">
       <div class="ln"><span>E-mail</span><span>${esc((ME && ME.email) || '')}</span></div>
       <div class="ln"><span>Situação</span><span>${PERFIL && PERFIL.approved ? '<span class="chip chip-ok">aprovado</span>' : '<span class="chip chip-warn">em análise</span>'}</span></div>
-      <div class="ln"><span>Perfil</span><span>${PERFIL && PERFIL.is_admin ? 'administrador' : 'usuário'}</span></div>
+      <div class="ln"><span>Perfil</span><span><b>${PAPEL_NOME[papel]}</b></span></div>
+      <div class="ln"><span>O que você pode fazer</span><span class="muted">${
+        papel === 'admin' ? 'tudo, inclusive usuários, backup e exclusões'
+        : papel === 'financeiro' ? 'lançar, receber e cadastrar — sem administrar usuários nem restaurar backup'
+        : 'consultar e imprimir, sem alterar nada'}</span></div>
     </div>
     <div style="padding:14px 18px 0;display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn" onclick="exportData()">↓ Baixar meus dados</button>
+      <button class="btn" onclick="baixarMeusDados()">↓ Baixar meus dados de acesso</button>
+      ${souAdmin() ? `<button class="btn btn-gold" onclick="exportData()">↓ Baixar backup da empresa</button>` : ''}
       <button class="btn btn-ghost" onclick="sair()">Sair</button>
       <button class="btn btn-neg" onclick="excluirMinhaConta()">Excluir minha conta</button></div>
-    <div class="dre-nota">Dados hospedados no Brasil (São Paulo), com acesso restrito a usuários aprovados.
-      Baixar os dados e excluir a conta são direitos seus e estão aqui por isso.</div></div>`;
-  if (!(PERFIL && PERFIL.is_admin)) return eu;
-  return eu + `<div class="panel"><div class="panel-head"><h2>Usuários<small>quem está esperando liberação e quem já entra</small></h2>
+    <div class="dre-nota">Sobre <b>você</b>, o sistema guarda e-mail, data do cadastro, situação e perfil.
+      Dentro do sistema há dados <b>da empresa e dos clientes dela</b> — CNPJ, endereço, contato e toda a
+      movimentação financeira —, que não são seus e por isso continuam aqui se você excluir a sua conta.
+      ${souAdmin() ? 'O backup completo da empresa é função sua, como administrador.'
+        : 'O backup completo da empresa é função do administrador.'}
+      <a href="#" onclick="mostrarPrivacidade();return false">Ler o aviso de privacidade</a>.</div></div>`;
+  if (!souAdmin()) return eu;
+  return eu + `<div class="panel"><div class="panel-head"><h2>Usuários<small>quem espera liberação, quem já entra e com qual perfil</small></h2>
     <button class="btn btn-sm" onclick="carregarUsuarios()">Atualizar</button></div>
-    <div id="admUsuarios"><div class="empty">Carregando…</div></div></div>`;
+    <div id="admUsuarios"><div class="empty">Carregando…</div></div>
+    <div class="dre-nota"><b>Administrador</b> configura, administra usuários, baixa e restaura backup e exclui.
+      <b>Financeiro</b> faz o dia a dia: lança, recebe e cadastra.
+      <b>Consulta</b> lê e imprime, sem alterar nada. Na dúvida, comece em Consulta.</div></div>`;
 };
+
+/* Direito do titular: os dados que são sobre a pessoa, não sobre a empresa. */
+function baixarMeusDados() {
+  const meu = {
+    gerado_em: new Date().toISOString(),
+    sistema: 'Sistema Lidere · Capital de Giro',
+    sobre: 'Dados de acesso do usuário. Os dados da empresa não entram aqui: '
+      + 'são da Lidere e o backup deles é função do administrador.',
+    email: (ME && ME.email) || '',
+    id: (ME && ME.id) || '',
+    cadastrado_em: (PERFIL && PERFIL.created_at) || '',
+    aprovado: !!(PERFIL && PERFIL.approved),
+    perfil: papelAtual(),
+    ultimo_acesso: (ME && ME.last_sign_in_at) || ''
+  };
+  const b = new Blob([JSON.stringify(meu, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(b);
+  a.download = `meus-dados-lidere-${hoje()}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  toast('Seus dados de acesso foram baixados');
+}
 async function carregarUsuarios() {
   const alvo = document.getElementById('admUsuarios'); if (!alvo) return;
   const { data, error } = await sb.from('profiles').select('*').order('created_at', { ascending: false });
   if (error) { alvo.innerHTML = `<div class="empty">${esc(error.message)}</div>`; return; }
-  alvo.innerHTML = `<div class="tbl-scroll"><table><thead><tr><th>E-mail</th><th>Cadastro</th><th>Situação</th><th></th></tr></thead>
+  const papelDe = u => u.papel || (u.is_admin ? 'admin' : 'financeiro');
+  alvo.innerHTML = `<div class="tbl-scroll"><table><thead><tr>
+      <th>E-mail</th><th>Cadastro</th><th>Situação</th><th>Perfil</th><th></th></tr></thead>
     <tbody>${data.map(u => `<tr>
-      <td>${esc(u.email)}${u.is_admin ? ' <span class="pill">admin</span>' : ''}</td>
+      <td>${esc(u.email)}</td>
       <td class="muted">${new Date(u.created_at).toLocaleDateString('pt-BR')}</td>
       <td>${u.approved ? '<span class="chip chip-ok">aprovado</span>' : '<span class="chip chip-warn">em análise</span>'}</td>
+      <td>${u.id === (ME && ME.id) ? `<b>${PAPEL_NOME[papelDe(u)]}</b>`
+        : `<select class="inl inl-xs" style="width:130px" onchange="mudarPapel('${u.id}', this.value, '${esc(u.email)}')">
+            ${['admin', 'financeiro', 'consulta'].map(v =>
+              `<option value="${v}" ${papelDe(u) === v ? 'selected' : ''}>${PAPEL_NOME[v]}</option>`).join('')}
+           </select>`}</td>
       <td><div class="acoes">${u.id === (ME && ME.id) ? '<span class="muted">você</span>'
         : `<button class="btn btn-sm ${u.approved ? '' : 'btn-gold'}" onclick="aprovar('${u.id}',${!u.approved})">${u.approved ? 'Revogar' : 'Aprovar'}</button>`}</div></td>
     </tr>`).join('')}</tbody></table></div>`;
 }
+/* Trocar o perfil de alguém muda o que essa pessoa pode fazer com o dinheiro
+   da empresa. Pede confirmação com o nome na frente. */
+function mudarPapel(id, papel, email) {
+  if (travadoAdmin('Mudar o perfil de um usuário')) return carregarUsuarios();
+  confirmar(`Passar <b>${esc(email)}</b> para o perfil <b>${PAPEL_NOME[papel]}</b>?`
+    + `<br><br>${papel === 'admin' ? 'Administrador administra usuários, restaura backup e exclui registros.'
+      : papel === 'financeiro' ? 'Financeiro lança, recebe e cadastra, mas não administra usuários nem restaura backup.'
+      : 'Consulta apenas lê e imprime: não consegue alterar nada.'}`, async () => {
+    const { error } = await sb.from('profiles')
+      .update({ papel, is_admin: papel === 'admin' }).eq('id', id);
+    if (error) return toast(error.message);
+    toast(`${email} agora é ${PAPEL_NOME[papel]}`);
+    carregarUsuarios();
+  }, 'Mudar perfil de acesso');
+  carregarUsuarios();
+}
 async function aprovar(id, valor) {
+  if (travadoAdmin('Aprovar ou revogar acesso')) return;
   const { error } = await sb.from('profiles').update({ approved: valor }).eq('id', id);
   if (error) return toast(error.message);
   toast(valor ? 'Usuário aprovado' : 'Acesso revogado');
