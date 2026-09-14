@@ -380,6 +380,11 @@ tr.crmov{background:var(--raise)}
 @keyframes piscada{0%,100%{background:transparent}30%,70%{background:color-mix(in srgb,var(--acc) 26%,transparent)}}
 tr.pisca{animation:piscada 1.6s ease-in-out 2}
 .crorig{font-size:10px;color:var(--mut);font-style:normal}
+.hist-i{padding:3px 0;font-size:12px;line-height:1.5}
+.hist-i b{color:var(--txt)}
+.hist-c{display:inline-block;margin-left:8px;font-style:normal;font-size:10.5px;color:var(--mut)}
+.hist-c s{opacity:.7}
+.hist-c b{color:var(--acc);font-weight:600}
 .pends{display:flex;flex-direction:column;gap:1px;background:var(--line)}
 .pend{display:grid;grid-template-columns:1fr auto auto;gap:14px;align-items:center;
   background:var(--panel);padding:11px 16px;border-left:2px solid var(--line-f)}
@@ -1234,7 +1239,7 @@ tr.crmov td{border-bottom-color:var(--line)}
 <datalist id="dlSacados"></datalist>
 <div class="toast" id="toast"></div>
 
-<script type="application/json" id="seed">{"versao":2,"tema":"lidere","config":{},"fontes":[],"clientes":[],"sacados":[],"planoContas":[],"titulos":[],"movs":[],"fechados":[],"apropriacoes":[],"capitalGiro":{"banco":"","contratos":[],"parcelas":[]}}</script>
+<script type="application/json" id="seed">{"versao":2,"tema":"lidere","config":{},"fontes":[],"clientes":[],"sacados":[],"planoContas":[],"titulos":[],"movs":[],"fechados":[],"apropriacoes":[],"historico":[],"capitalGiro":{"banco":"","contratos":[],"parcelas":[]}}</script>
 <script>
 const MODO_NUVEM = true;
 /* =========================================================================
@@ -1361,6 +1366,7 @@ function migrar() {
   if (!Array.isArray(DB.fechados)) DB.fechados = [];
   // cada apropriação guarda como estava antes, para poder ser desfeita inteira
   if (!Array.isArray(DB.apropriacoes)) DB.apropriacoes = [];
+  if (!Array.isArray(DB.historico)) DB.historico = [];
   // Arquivo/base de antes da sequência: o array já está na ordem da planilha,
   // então o índice reconstrói a ordem certa sem precisar adivinhar nada.
   if (DB.movs.some(m => !m.seq)) DB.movs.forEach((m, i) => { if (!m.seq) m.seq = i + 1; });
@@ -1384,7 +1390,14 @@ function migrar() {
   // resíduo de seções que saíram do app
   ['principiosMeus', 'adotados', 'lidos', 'pendencias'].forEach(k => { delete DB[k]; });
 }
-function save() { try { localStorage.setItem(KEY, JSON.stringify(DB)); } catch (e) { toast('Não consegui salvar (armazenamento cheio)'); } }
+/* Toda mutação passa por aqui. O histórico se pendura neste ponto e não em
+   cada tela: assim registra até o que for escrito depois, sem ninguém lembrar. */
+function gravar() { try { localStorage.setItem(KEY, JSON.stringify(DB)); } catch (e) { toast('Não consegui salvar (armazenamento cheio)'); } }
+let save = function () {
+  if (typeof histRegistrar === 'function') histRegistrar();
+  gravar();
+};
+if (!Array.isArray(DB && DB.historico)) { /* preenchido em migrar() */ }
 
 /* Atalhos para as listas vivas — nada apagado aparece em tela. */
 const tits = () => alive(DB.titulos);
@@ -1813,6 +1826,7 @@ const IC = {
   fechamento: '<rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 018 0v3"/>',
   acesso: '<circle cx="12" cy="8" r="3.4"/><path d="M5.5 20c0-3.4 2.9-5.6 6.5-5.6s6.5 2.2 6.5 5.6"/>',
   lixeira: '<path d="M3.5 6h17M8.5 6V3.6h7V6M6.4 6v14.4h11.2V6"/>',
+  historico: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
   carteira: '<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M7 3v3M17 3v3"/><circle cx="16.5" cy="14.5" r="1.4"/>',
   correcao: '<path d="M4 19V5M4 19h16"/><path d="M7 16l3.5-4 3 2.5L20 7"/><circle cx="20" cy="7" r="1.3"/>',
   clientes: '<circle cx="8" cy="8" r="3.2"/><path d="M2.5 20c0-3.2 2.5-5.2 5.5-5.2s5.5 2 5.5 5.2"/><path d="M16 5.5a3 3 0 010 5.6M18 14.6c2 .7 3.5 2.5 3.5 5.4"/>'
@@ -1835,7 +1849,7 @@ const NAV = [
   { g: 'Gestão', its: [['clientes', 'Clientes'], ['correcao', 'Correção'], ['resultado', 'Resultado'],
                        ['projecao', 'Fluxo de caixa'], ['contas', 'Parcelas bancárias']] },
   { g: 'Administração', its: [['fechamento', 'Fechamento'], ['cadastros', 'Fontes e taxas'],
-                              ['plano', 'Plano de contas'],
+                              ['plano', 'Plano de contas'], ['historico', 'Histórico'],
                               ...(MODO_NUVEM ? [['acesso', 'Usuários'] ] : []), ['lixeira', 'Lixeira']] }
 ];
 const SECAO = {
@@ -1853,6 +1867,7 @@ const SECAO = {
   fechamento: ['Fechamento', 'Mês conferido vira mês travado — e reabrir é um clique'],
   contas: ['Parcelas bancárias', 'Parcelas dos contratos de capital de giro tomado no banco'],
   cadastros: ['Fontes e taxas', 'Contas de origem, taxas padrão e regime de juros'],
+  historico: ['Histórico', 'O que mudou, quando, por quem, e de qual valor para qual'],
   plano: ['Plano de contas', 'A conta define o grupo e o serviço de todo o histórico'],
   acesso: ['Acesso', 'Sua conta, seus dados e — se você for administrador — quem entra'],
   lixeira: ['Excluídos', 'Nada some de imediato — dá para restaurar']
@@ -7261,6 +7276,148 @@ function cpDesfazer(id) {
 }
 
 /* =========================================================================
+   Histórico de alterações
+
+   O sistema já guardava o que existe agora. Não guardava como chegou aqui:
+   um título de 10.000 que virou 8.000 não contava quem mudou, quando, nem
+   de quanto era antes. Em conta de terceiro isso não é detalhe — é a
+   diferença entre corrigir um erro e descobrir um.
+
+   O registro é do próprio estado, não de tela: `save()` é o funil por onde
+   toda mutação passa, então comparar o antes e o depois ali pega tudo, até o
+   que for escrito no futuro sem ninguém lembrar de registrar.
+
+   Guarda o que mudou, não o estado inteiro: um instantâneo por gravação
+   encheria o banco em uma semana. E guarda com teto, porque histórico que
+   cresce sem limite acaba derrubando o que ele deveria proteger.
+   ========================================================================= */
+const HIST_MAX = 400;
+
+/* O que interessa de cada registro, para comparar sem carregar o mundo. */
+function histFoto() {
+  const f = {};
+  (DB.titulos || []).forEach(t => {
+    f['t' + t.id] = [t.valor, t.status, t.dataVenc, t.cliente, t.sacado, t.tipo, t.deletedAt ? 1 : 0].join('|');
+  });
+  (DB.movs || []).forEach(m => {
+    f['m' + m.id] = [m.entrada, m.saida, m.resultado, m.data, m.descricao, m.contaId, m.deletedAt ? 1 : 0].join('|');
+  });
+  (DB.capitalGiro && DB.capitalGiro.parcelas || []).forEach(p => {
+    f['p' + p.id] = [p.pago ? 1 : 0, p.valorPago, p.dataPgto].join('|');
+  });
+  return f;
+}
+let histAnterior = null;
+
+const HIST_ROTULO = { t: 'Título', m: 'Lançamento', p: 'Parcela do banco' };
+const HIST_CAMPOS = {
+  t: ['valor', 'situação', 'vencimento', 'cliente', 'sacado', 'tipo', 'excluído'],
+  m: ['entrada', 'saída', 'resultado', 'data', 'descrição', 'conta', 'excluído'],
+  p: ['pago', 'valor pago', 'data do pagamento']
+};
+
+function histDescrever(chave) {
+  const tipo = chave[0], id = chave.slice(1);
+  if (tipo === 't') {
+    const t = (DB.titulos || []).find(x => x.id === id);
+    return t ? `${t.cliente || 'sem cliente'}${t.nf ? ' · NF ' + t.nf : ''}` : 'removido';
+  }
+  if (tipo === 'm') {
+    const m = (DB.movs || []).find(x => x.id === id);
+    return m ? (m.descricao || 'sem descrição').slice(0, 60) : 'removido';
+  }
+  const p = (DB.capitalGiro && DB.capitalGiro.parcelas || []).find(x => x.id === id);
+  return p ? `${p.contrato} ${p.num}/${p.total}` : 'removida';
+}
+
+/* Compara a foto anterior com a atual e devolve as diferenças legíveis. */
+function histDiferencas(antes, agora) {
+  const mudou = [];
+  const chaves = new Set([...Object.keys(antes), ...Object.keys(agora)]);
+  chaves.forEach(k => {
+    const a = antes[k], b = agora[k];
+    if (a === b) return;
+    const tipo = k[0];
+    if (a === undefined) { mudou.push({ k, tipo, acao: 'criou', campos: [] }); return; }
+    if (b === undefined) { mudou.push({ k, tipo, acao: 'removeu', campos: [] }); return; }
+    const va = a.split('|'), vb = b.split('|'), nomes = HIST_CAMPOS[tipo] || [];
+    const campos = [];
+    va.forEach((x, i) => { if (x !== vb[i]) campos.push({ campo: nomes[i] || i, de: x, para: vb[i] }); });
+    mudou.push({ k, tipo, acao: 'alterou', campos });
+  });
+  return mudou;
+}
+
+/* Chamado logo depois de cada save(). Escreve uma entrada por gravação. */
+function histRegistrar(quem) {
+  const agora = histFoto();
+  if (histAnterior === null) { histAnterior = agora; return; }
+  const dif = histDiferencas(histAnterior, agora);
+  histAnterior = agora;
+  if (!Array.isArray(DB.historico)) DB.historico = [];
+  // o teto vale sempre, mesmo na gravação que não mudou nada do que é
+  // acompanhado: histórico grande demais é problema por si só
+  if (DB.historico.length > HIST_MAX) DB.historico = DB.historico.slice(-HIST_MAX);
+  if (!dif.length) return;
+  DB.historico.push({
+    id: uid(), quando: new Date().toISOString(),
+    quem: quem || (typeof ME !== 'undefined' && ME && ME.email) || 'local',
+    n: dif.length,
+    itens: dif.slice(0, 30).map(d => ({
+      tipo: d.tipo, acao: d.acao, alvo: histDescrever(d.k),
+      campos: d.campos.slice(0, 6)
+    }))
+  });
+  if (DB.historico.length > HIST_MAX) DB.historico = DB.historico.slice(-HIST_MAX);
+}
+
+/* ---------- Tela ---------- */
+let histFiltro = '';
+
+VIEWS.historico = function () {
+  const h = (DB.historico || []).slice().reverse();
+  const busca = histFiltro.trim().toLowerCase();
+  const lista = busca ? h.filter(x => JSON.stringify(x).toLowerCase().includes(busca)) : h;
+
+  const stats = `<div class="stats">
+    <div class="stat"><div class="k">Alterações guardadas</div><div class="v">${h.length}</div>
+      <div class="sub">as ${HIST_MAX} últimas, das mais recentes para as mais antigas</div></div>
+    <div class="stat"><div class="k">Última</div><div class="v" style="font-size:15px">${h.length ? new Date(h[0].quando).toLocaleString('pt-BR') : '—'}</div>
+      <div class="sub">${h.length ? esc(h[0].quem) : 'nenhuma ainda'}</div></div>
+    <div class="stat"><div class="k">Pessoas</div><div class="v">${new Set(h.map(x => x.quem)).size}</div>
+      <div class="sub">quem gravou neste histórico</div></div>
+  </div>`;
+
+  const linhas = lista.slice(0, 200).map(x => `<tr>
+      <td>${new Date(x.quando).toLocaleString('pt-BR')}</td>
+      <td>${esc(x.quem)}</td>
+      <td>${x.itens.map(i => `<div class="hist-i">
+        <span class="chip ${i.acao === 'criou' ? 'chip-ok' : i.acao === 'removeu' ? 'chip-bad' : 'chip-n'}">${i.acao}</span>
+        <b>${esc(HIST_ROTULO[i.tipo] || i.tipo)}</b> ${esc(i.alvo)}
+        ${i.campos.map(c => `<i class="hist-c">${esc(c.campo)}: <s>${esc(histVal(c.de))}</s> → <b>${esc(histVal(c.para))}</b></i>`).join('')}
+      </div>`).join('')}${x.n > x.itens.length ? `<div class="muted" style="font-size:11px">e mais ${x.n - x.itens.length} alteração(ões) nessa gravação</div>` : ''}</td>
+    </tr>`).join('');
+
+  return stats +
+    `<div class="filters"><input class="busca" placeholder="Buscar por cliente, valor, pessoa..."
+       value="${esc(histFiltro)}" oninput="histBuscar(this.value)"></div>
+     <div class="panel"><div class="panel-head"><h2>Histórico de alterações<small>o que mudou, quando, por quem, e de qual valor para qual</small></h2></div>
+      <div class="tbl-scroll" style="max-height:66vh"><table><thead><tr>
+        <th style="width:150px">Quando</th><th style="width:170px">Quem</th><th>O que mudou</th></tr></thead>
+      <tbody>${linhas || `<tr><td colspan="3"><div class="empty">${h.length ? 'Nada encontrado nessa busca.' : 'Nenhuma alteração registrada ainda. O histórico começa a partir de agora.'}</div></td></tr>`}</tbody></table></div>
+      ${lista.length > 200 ? `<div class="agpe">Mostrando as 200 mais recentes de ${lista.length}.</div>` : ''}</div>`;
+};
+
+function histVal(v) {
+  if (v === 'null' || v === 'undefined' || v === '') return '—';
+  if (v === '1') return 'sim';
+  if (v === '0') return 'não';
+  const n = Number(v);
+  return isFinite(n) && v !== '' && /^-?\d+(\.\d+)?$/.test(v) ? brl(n) : v;
+}
+function histBuscar(v) { histFiltro = v; render(); }
+
+/* =========================================================================
    Backup e gravação do arquivo
    ========================================================================= */
 function exportData() {
@@ -7683,7 +7840,10 @@ function marcarSync(erro, texto) {
 }
 /* A troca da Fase 1 para a Fase 2, em uma linha: save() deixa de ir para o
    localStorage e passa a ir para a nuvem. Nenhuma view mudou. */
-save = function () { persistir(); };
+save = function () {
+  if (typeof histRegistrar === 'function') histRegistrar(ME && ME.email);
+  persistir();
+};
 
 /* ---------- Administração (só para quem é admin) ---------- */
 VIEWS.acesso = function () {
