@@ -380,6 +380,38 @@ tr.crmov{background:var(--raise)}
 @keyframes piscada{0%,100%{background:transparent}30%,70%{background:color-mix(in srgb,var(--acc) 26%,transparent)}}
 tr.pisca{animation:piscada 1.6s ease-in-out 2}
 .crorig{font-size:10px;color:var(--mut);font-style:normal}
+.pends{display:flex;flex-direction:column;gap:1px;background:var(--line)}
+.pend{display:grid;grid-template-columns:1fr auto auto;gap:14px;align-items:center;
+  background:var(--panel);padding:11px 16px;border-left:2px solid var(--line-f)}
+.pend.grave{border-left-color:var(--neg);background:color-mix(in srgb,var(--neg) 7%,var(--panel))}
+.pend.alto{border-left-color:var(--neg)}
+.pend.hoje{border-left-color:var(--acc)}
+.pend.medio{border-left-color:var(--warn)}
+.pend-t b{display:block;font-size:12.5px;color:var(--txt)}
+.pend-t span{display:block;font-size:11px;color:var(--mut);margin-top:2px}
+.pend-v{font-size:14px;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
+.pend.grave .pend-v,.pend.alto .pend-v{color:var(--neg)}
+.pend.medio .pend-v{color:var(--warn)}
+.pend-ok{border:1px solid var(--line-f);border-left:2px solid var(--pos);background:var(--panel);
+  color:var(--dim);padding:11px 14px;border-radius:8px;font-size:12.5px;margin-bottom:14px}
+.pend-ok b{color:var(--pos)}
+@media(max-width:700px){.pend{grid-template-columns:1fr;gap:6px}}
+.abas{display:flex;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:10px;
+  overflow:hidden;margin-bottom:14px}
+.aba{flex:1;background:var(--panel);border:0;padding:11px 14px;text-align:left;cursor:pointer;
+  color:var(--dim);display:block;min-width:0}
+.aba:hover{background:var(--raise)}
+.aba.on{background:var(--panel2);box-shadow:inset 0 2px 0 var(--acc)}
+.aba-r{display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:1.1px;color:var(--mut);font-weight:800}
+.aba.on .aba-r{color:var(--acc)}
+.aba-v{display:block;font-size:16px;font-weight:700;color:var(--txt);margin-top:3px;font-variant-numeric:tabular-nums}
+.aba-n{display:block;font-size:10.5px;color:var(--mut);margin-top:1px}
+@media(max-width:700px){.abas{flex-direction:column}}
+/* Faixa do perfil, quando não é administrador */
+.perfilfaixa{border:1px solid var(--line-f);border-left:2px solid var(--acc);background:var(--panel);
+  color:var(--dim);padding:9px 12px;border-radius:8px;font-size:12px;margin-bottom:12px}
+.perfilfaixa.leitura{border-left-color:var(--warn)}
+.perfilfaixa b{color:var(--txt)}
 .ac-senha{position:relative;display:flex;align-items:center}
 .ac-senha input{padding-right:70px;width:100%}
 .ac-olho{position:absolute;right:8px;background:none;border:0;color:var(--mut);font-size:11px;
@@ -1752,31 +1784,42 @@ const IC = {
   fechamento: '<rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 018 0v3"/>',
   acesso: '<circle cx="12" cy="8" r="3.4"/><path d="M5.5 20c0-3.4 2.9-5.6 6.5-5.6s6.5 2.2 6.5 5.6"/>',
   lixeira: '<path d="M3.5 6h17M8.5 6V3.6h7V6M6.4 6v14.4h11.2V6"/>',
+  carteira: '<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M7 3v3M17 3v3"/><circle cx="16.5" cy="14.5" r="1.4"/>',
   correcao: '<path d="M4 19V5M4 19h16"/><path d="M7 16l3.5-4 3 2.5L20 7"/><circle cx="20" cy="7" r="1.3"/>',
   clientes: '<circle cx="8" cy="8" r="3.2"/><path d="M2.5 20c0-3.2 2.5-5.2 5.5-5.2s5.5 2 5.5 5.2"/><path d="M16 5.5a3 3 0 010 5.6M18 14.6c2 .7 3.5 2.5 3.5 5.4"/>'
 };
 const svgIc = k => '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' + (IC[k] || '') + '</svg>';
 
+/* O menu segue o dia: primeiro o que fazer hoje, depois o que se opera, depois
+   o que se analisa, e por último o que quase nunca se mexe. Carteira reúne o
+   que era "Títulos a vencer" e "Recebidos", que eram a mesma coisa em dois
+   momentos; Correção deixou o menu e virou aba dentro de Clientes, que é onde
+   a pergunta nasce. */
 const NAV = [
-  { g: 'Visão', its: [['painel', 'Painel']] },
-  { g: 'Operação', its: [['razao', 'Razão'], ['titulos', 'Títulos a vencer'], ['antecipacoes', 'Antecipações'], ['captacoes', 'Captações'], ['recebidos', 'Recebidos']] },
-  { g: 'Análise', its: [['correcao', 'Correção'], ['clientes', 'Por cliente'], ['resultado', 'Resultado'], ['projecao', 'Projeção de caixa'], ['contas', 'Contas a pagar']] },
-  { g: 'Ajustes', its: [['fechamento', 'Fechamento'], ['cadastros', 'Cadastros'], ['plano', 'Plano de contas'], ...(MODO_NUVEM ? [['acesso', 'Acesso']] : []), ['lixeira', 'Excluídos']] }
+  { g: 'Início', its: [['painel', 'Visão geral']] },
+  { g: 'Operação', its: [['razao', 'Movimentações'], ['carteira', 'Carteira'],
+                         ['antecipacoes', 'Antecipações'], ['captacoes', 'Captações']] },
+  { g: 'Gestão', its: [['clientes', 'Clientes'], ['resultado', 'Resultado'],
+                       ['projecao', 'Fluxo de caixa'], ['contas', 'Parcelas bancárias']] },
+  { g: 'Administração', its: [['fechamento', 'Fechamento'], ['cadastros', 'Fontes e taxas'],
+                              ['plano', 'Plano de contas'],
+                              ...(MODO_NUVEM ? [['acesso', 'Usuários'] ] : []), ['lixeira', 'Lixeira']] }
 ];
 const SECAO = {
-  painel: ['Painel', 'Onde o dinheiro está agora, e se a conta fecha'],
-  razao: ['Razão', 'Todo lançamento do mês, com saldo e montante correndo'],
-  titulos: ['Títulos a vencer', 'O que está na rua agora — dá para receber ou prorrogar'],
+  painel: ['Visão geral', 'O que precisa de você hoje, e onde o dinheiro está'],
+  razao: ['Movimentações', 'Todo lançamento do mês, com saldo e patrimônio correndo'],
+  titulos: ['Títulos', 'O que está aplicado agora: dá para receber ou prorrogar'],
+  carteira: ['Carteira', 'Os títulos de clientes em aberto, vencidos e já recebidos'],
   antecipacoes: ['Antecipações', 'Recurso enviado que ainda não voltou, com juros projetados'],
   captacoes: ['Captações', 'Recurso de terceiro no seu caixa — e o custo que ele gera'],
   recebidos: ['Recebidos', 'Títulos e antecipações já baixados'],
   correcao: ['Correção', 'A planilha de correção do recurso na rua, dia a dia, por cliente'],
-  clientes: ['Por cliente', 'Quanto cada cliente deve hoje, e de que esse número é feito'],
+  clientes: ['Clientes', 'Quanto cada um deve hoje, a correção dia a dia e os cadastros'],
   resultado: ['Resultado', 'Receitas e despesas por conta, com comparativo do período anterior'],
-  projecao: ['Projeção de caixa', 'O que já está contratado, dia a dia, a partir do saldo de hoje'],
+  projecao: ['Fluxo de caixa', 'O que já está contratado, dia a dia, a partir do saldo de hoje'],
   fechamento: ['Fechamento', 'Mês conferido vira mês travado — e reabrir é um clique'],
-  contas: ['Contas a pagar', 'Parcelas dos contratos de capital de giro — só acompanhamento'],
-  cadastros: ['Cadastros', 'Fontes, taxas padrão, clientes e sacados com dados completos'],
+  contas: ['Parcelas bancárias', 'Parcelas dos contratos de capital de giro tomado no banco'],
+  cadastros: ['Fontes e taxas', 'Contas de origem, taxas padrão e regime de juros'],
   plano: ['Plano de contas', 'A conta define o grupo e o serviço de todo o histórico'],
   acesso: ['Acesso', 'Sua conta, seus dados e — se você for administrador — quem entra'],
   lixeira: ['Excluídos', 'Nada some de imediato — dá para restaurar']
@@ -1954,10 +1997,10 @@ VIEWS.painel = function () {
   const atrasadasCG = cgParcelas().filter(cgAtrasada).length;
 
   const stats = `<div class="stats">
-    <div class="stat"><div class="k">Saldo em caixa</div><div class="v">${brl(g.saldo)}</div><div class="sub">Lidere + Leo, hoje</div></div>
-    <div class="stat"><div class="k">Na rua</div><div class="v goldtxt">${brl(g.aVencer + g.antec)}</div><div class="sub">títulos a vencer + antecipações</div></div>
-    ${g.captacao ? `<div class="stat"><div class="k">De terceiros</div><div class="v neg">${brl(g.captacao)}</div><div class="sub">no caixa, mas não é da empresa</div></div>` : ''}
-    <div class="stat"><div class="k">Montante</div><div class="v metatxt">${brl(g.montante)}</div><div class="sub">patrimônio consolidado</div></div>
+    <div class="stat"><div class="k">Saldo disponível</div><div class="v">${brl(g.saldo)}</div><div class="sub">Lidere + Leo, hoje</div></div>
+    <div class="stat"><div class="k">Capital aplicado</div><div class="v goldtxt">${brl(g.aVencer + g.antec)}</div><div class="sub">títulos e antecipações na mão de clientes</div></div>
+    ${g.captacao ? `<div class="stat"><div class="k">Recursos de terceiros</div><div class="v neg">${brl(g.captacao)}</div><div class="sub">no caixa, mas pertencem a investidores</div></div>` : ''}
+    <div class="stat"><div class="k">Patrimônio do giro</div><div class="v metatxt">${brl(g.montante)}</div><div class="sub">caixa + capital aplicado − recursos de terceiros</div></div>
     <div class="stat"><div class="k">Vencido</div><div class="v ${totVenc ? 'neg' : 'pos'}">${brl(totVenc)}</div><div class="sub">${vencidos.length} título(s) passaram da data</div></div>
     <div class="stat"><div class="k">Devendo ao banco</div><div class="v">${brl(cg.saldo)}</div><div class="sub">${cg.nPendentes} parcelas a pagar</div></div>
   </div>`;
@@ -1967,7 +2010,7 @@ VIEWS.painel = function () {
   if (totVenc) alertas.push(`<div class="alert bad"><b>${vencidos.length} título(s) vencido(s)</b> somando ${brl(totVenc)}. O primeiro dia de atraso é o de maior chance de recuperar.<button class="btn btn-sm right" onclick="go('titulos')">Ver títulos</button></div>`);
   if (atrasadasCG) alertas.push(`<div class="alert bad"><b>${atrasadasCG} parcela(s) do banco</b> venceram e continuam em aberto.<button class="btn btn-sm right" onclick="go('contas')">Ver contas a pagar</button></div>`);
 
-  const conciliacao = `<div class="panel"><div class="panel-head"><h2>Conciliação<small>títulos a vencer + antecipações em aberto + saldo bancário tem que dar o montante</small></h2></div>
+  const conciliacao = `<div class="panel"><div class="panel-head"><h2>Conciliação<small>títulos + antecipações + saldo bancário tem que dar o patrimônio do giro</small></h2></div>
     <div class="grid3">${['GIRO', 'LEO', 'GERAL'].map(f => cardConc(conc(f))).join('')}</div></div>`;
 
   // O geral só diz quanto existe. Quem paga é uma fonte de cada vez, então o
@@ -1975,7 +2018,9 @@ VIEWS.painel = function () {
   const caixa = `<div class="panel"><div class="panel-head"><h2>Caixa disponível por fonte<small>o geral é a soma, mas cada saída sai de uma fonte só</small></h2></div>
     <div style="padding:0 14px 14px">${cardsCaixa()}</div></div>`;
 
-  return stats + alertas.join('') + caixa + conciliacao + painelConcentracao() +
+  // Primeiro o que precisa de ação, depois o retrato. O painel antigo começava
+  // pelo retrato, e quem abria de manhã tinha que garimpar a tarefa do dia.
+  return faixaPerfil() + painelPendencias() + stats + caixa + conciliacao + painelConcentracao() +
     grafResultadoServico() + `<div class="grid2">${grafTitulosPorMes()}${grafEvolucao()}</div>` + grafPorConta();
 };
 
@@ -2033,7 +2078,7 @@ function cardConc(c) {
     <div class="ln"><span>+ Saldo bancário</span><span>${brl(c.saldo)}</span></div>
     ${c.captacao ? `<div class="ln"><span>− Recurso de terceiros</span><span class="neg">${brl(-c.captacao)}</span></div>` : ''}
     <div class="ln soma"><span><b>= Soma</b></span><span>${brl(c.soma)}</span></div>
-    <div class="ln"><span>Montante (patrimônio)</span><span>${brl(c.montante)}</span></div>
+    <div class="ln"><span>Patrimônio do giro</span><span>${brl(c.montante)}</span></div>
     <div class="ln dif"><span><b>Diferença</b></span><span class="${c.bate ? 'pos' : 'neg'}">${brl(c.dif)}</span></div></div>`;
 }
 
@@ -2205,8 +2250,11 @@ function ritmoDoMes(mk, linhas) {
     </div></div>`;
 }
 
-/* ---------- Títulos a vencer ---------- */
-VIEWS.titulos = function () {
+/* ---------- Títulos ----------
+   Recebe o recorte da aba da Carteira: só os vencidos, ou todos os abertos.
+   Sem argumento continua sendo a lista inteira, que é como as outras telas
+   e os testes chamam. */
+VIEWS.titulos = function (soVencidos) {
   const fs = fontesDoFiltro();
   const lista = tits().filter(t => t.tipo !== 'ANTECIPACAO' && emAberto(t) && fs.includes(t.fonte))
     .map(t => ({ ...t, st: statusCalc(t) }));
@@ -2222,7 +2270,9 @@ VIEWS.titulos = function () {
     <div class="stat"><div class="k">Sacados distintos</div><div class="v">${new Set(lista.map(t => t.sacado).filter(Boolean)).size}</div><div class="sub">quanto mais, menos concentração</div></div>
   </div>`;
 
-  const dados = ordena(filtra(lista, busca.titulos, ['cliente', 'sacado', 'nf']), ordem.titulos);
+  const recorte = soVencidos === true ? lista.filter(t => t.st === 'VENCIDO')
+    : soVencidos === false ? lista.filter(t => t.st !== 'VENCIDO') : lista;
+  const dados = ordena(filtra(recorte, busca.titulos, ['cliente', 'sacado', 'nf']), ordem.titulos);
   const geral = fonteFiltro === 'GERAL';
   const corpo = dados.map(t => `<tr>
       ${geral ? `<td>${fonteTag(t.fonte)}</td>` : ''}
@@ -2239,9 +2289,9 @@ VIEWS.titulos = function () {
         <button class="btn btn-sm" title="Dar prazo novo e cobrar os juros do período" onclick="abrirProrrog('${t.id}')">Prorrogar</button>
         <button class="btn btn-sm btn-gold" onclick="abrirReceb('${t.id}')">Receber</button></div></td></tr>`).join('');
 
-  return stats + calendarioVencimentos() +
+  return stats + (soVencidos === undefined || soVencidos === false ? calendarioVencimentos() : '') +
     `<div class="filters">${segFonte()}${campoBusca('titulos', 'Buscar cliente, sacado, NF...')}</div>
-     <div class="panel"><div class="panel-head"><h2>Títulos a vencer<small>não depende de mês — é a foto do que está na rua agora</small></h2>
+     <div class="panel"><div class="panel-head"><h2>${soVencidos === true ? 'Títulos vencidos' : 'Títulos em aberto'}<small>não depende de mês: é a foto do que está aplicado agora</small></h2>
        <button class="btn btn-sm" onclick="abrirOper()">+ Operação</button></div>
        <div class="tbl-scroll"><table><thead><tr>
          ${geral ? '<th>Fonte</th>' : ''}${th('titulos', 'cliente', 'Cliente')}${th('titulos', 'sacado', 'Sacado')}<th>NF</th>
@@ -2261,7 +2311,7 @@ VIEWS.antecipacoes = function () {
   const venc = lista.filter(t => t.st === 'VENCIDO');
 
   const stats = `<div class="stats">
-    <div class="stat"><div class="k">Na rua</div><div class="v">${brl(total)}</div><div class="sub">${lista.length} antecipação(ões)</div></div>
+    <div class="stat"><div class="k">Capital aplicado</div><div class="v">${brl(total)}</div><div class="sub">${lista.length} antecipação(ões)</div></div>
     <div class="stat"><div class="k">Juros acumulados</div><div class="v pos">${brl(jur)}</div><div class="sub">projetado até hoje, ${fmtTaxa(taxaPadrao())}% ao mês</div></div>
     <div class="stat"><div class="k">Passou da data</div><div class="v ${venc.length ? 'neg' : 'pos'}">${brl(venc.reduce((s, t) => s + t.valor, 0))}</div><div class="sub">${venc.length} em atraso</div></div>
     <div class="stat"><div class="k">Sem data prevista</div><div class="v ${semData.length ? 'warntxt' : 'pos'}">${semData.length}</div><div class="sub">sem data não há como cobrar</div></div>
@@ -5139,7 +5189,7 @@ function atualizaDestino() {
       <div class="conta">A conta sai da natureza de cada linha: antecipação vai para retorno de antecipação,
         título de cliente vai para juros, e captação vira custo.</div></div>`;
   el('ap_efeito').innerHTML = `<div class="l"><span>Em aberto (títulos)</span><span class="${total < 0 ? 'neg' : 'pos'}">${brl(total)}</span></div>
-    <div class="l"><span>Montante</span><span class="${total < 0 ? 'neg' : 'pos'}">${brl(total)}</span></div>
+    <div class="l"><span>Patrimônio do giro</span><span class="${total < 0 ? 'neg' : 'pos'}">${brl(total)}</span></div>
     <div class="l"><span>Caixa</span><span class="muted">não se move</span></div>
     <div class="l tot"><span>Conciliação</span><span class="pos">continua fechando</span></div>
     <div class="conta">Nada passa pelo caixa: só o direito cresce, e o montante acompanha.
@@ -5617,9 +5667,9 @@ function tfCalc() {
   const cd = conc(de), cp = conc(para);
   box.innerHTML = `
     <div class="l"><span><b>${esc(rotuloFonte(de))}</b> — caixa</span><span>${brl(cd.saldo)} → ${brl(cd.saldo - v)}</span></div>
-    <div class="l"><span><b>${esc(rotuloFonte(de))}</b> — recurso</span><span class="neg">${brl(cd.montante)} → ${brl(cd.montante - v)}</span></div>
+    <div class="l"><span><b>${esc(rotuloFonte(de))}</b> — patrimônio</span><span class="neg">${brl(cd.montante)} → ${brl(cd.montante - v)}</span></div>
     <div class="l"><span><b>${esc(rotuloFonte(para))}</b> — caixa</span><span>${brl(cp.saldo)} → ${brl(cp.saldo + v)}</span></div>
-    <div class="l tot"><span><b>${esc(rotuloFonte(para))}</b> — recurso</span><span class="pos">${brl(cp.montante)} → ${brl(cp.montante + v)}</span></div>
+    <div class="l tot"><span><b>${esc(rotuloFonte(para))}</b> — patrimônio</span><span class="pos">${brl(cp.montante)} → ${brl(cp.montante + v)}</span></div>
     <div class="conta">O geral não muda: sai ${brl(v)} de um lado e entra ${brl(v)} do outro.
       As duas conciliações continuam fechando, e nada entra como receita ou despesa.</div>`;
   box.classList.add('show');
@@ -6867,6 +6917,186 @@ function desfazerRateio(lote) {
     save(); render();
     toast(`Rateio de ${brl(total)} desfeito`);
   }, 'Desfazer rateio');
+}
+
+/* =========================================================================
+   Carteira
+   "Títulos a vencer" e "Recebidos" eram duas páginas para a mesma coisa vista
+   em dois momentos. Viraram uma página com abas: em aberto, vencidos e
+   recebidos são recortes da mesma carteira, e trocar de recorte não deveria
+   custar uma viagem pelo menu.
+
+   As telas antigas continuam existindo como funções, porque são elas que
+   sabem montar cada lista. Aqui só se escolhe qual mostrar e se dá o contexto
+   do total de cada recorte, que é o que decide para onde olhar.
+   ========================================================================= */
+let carteiraAba = 'aberto';
+
+function carteiraIr(a) { carteiraAba = a; render(); }
+
+VIEWS.carteira = function () {
+  const fs = fontesDoFiltro();
+  const meus = tits().filter(t => fs.includes(t.fonte) && t.tipo !== 'ANTECIPACAO' && !ehCaptacao(t));
+  const abertos = meus.filter(emAberto);
+  const vencidos = abertos.filter(t => statusCalc(t) === 'VENCIDO');
+  const aVencer = abertos.filter(t => statusCalc(t) !== 'VENCIDO');
+  // A aba de recebidos mostra tudo que foi baixado, antecipação inclusive:
+  // é o histórico de quitação, não só o dos títulos de cliente. A contagem
+  // precisa ser a mesma da lista, senão o número da aba mente.
+  const baixados = tits().filter(t => fs.includes(t.fonte)
+    && (t.status === 'PAGO' || t.status === 'PERDA'));
+  const soma = l => l.reduce((s, t) => s + (t.valor || 0), 0);
+
+  const abas = [
+    ['aberto', 'Em aberto', aVencer.length, soma(aVencer), ''],
+    ['vencido', 'Vencidos', vencidos.length, soma(vencidos), vencidos.length ? 'neg' : ''],
+    ['recebido', 'Recebidos', baixados.length, baixados.reduce((s, t) => s + (t.valorRecebido || 0), 0), 'pos']
+  ];
+
+  const nav = `<div class="abas">${abas.map(([id, rot, n, v, cls]) => `
+    <button class="aba ${carteiraAba === id ? 'on' : ''}" onclick="carteiraIr('${id}')">
+      <span class="aba-r">${rot}</span>
+      <span class="aba-v ${cls}">${brl(v)}</span>
+      <span class="aba-n">${n} título(s)</span>
+    </button>`).join('')}</div>`;
+
+  return nav + (carteiraAba === 'recebido' ? VIEWS.recebidos() : listaCarteira(carteiraAba === 'vencido'));
+};
+
+/* A lista de títulos, filtrada pelo recorte da aba. A montagem é a mesma de
+   sempre: só o conjunto muda. */
+function listaCarteira(soVencidos) {
+  return VIEWS.titulos(soVencidos);
+}
+
+/* =========================================================================
+   Pendências
+   O painel respondia "como está a empresa". A primeira pergunta de quem abre
+   o sistema de manhã é outra: "o que precisa de mim hoje?". Indicador bom não
+   substitui lista de tarefa — saber que há R$ 191 mil vencidos não diz de quem
+   cobrar primeiro.
+
+   Cada pendência sabe a própria urgência, o próprio número e para onde levar.
+   Quando não há nenhuma, o bloco some: painel que mostra "0 pendências" todo
+   dia ensina a ignorar o painel.
+   ========================================================================= */
+function pendencias() {
+  const fs = fontesDoFiltro(), hj = hoje(), p = [];
+  const abertos = tits().filter(t => emAberto(t) && fs.includes(t.fonte));
+
+  const c = conc(fonteFiltro);
+  if (!c.bate) p.push({
+    nivel: 'grave', rot: 'A conciliação não fecha', valor: brl(c.dif),
+    txt: 'Enquanto essa diferença existir, nenhum outro número aqui é confiável.',
+    acao: "go('razao')", botao: 'Abrir movimentações'
+  });
+
+  const negativas = fontesGeral().map(f => ({ f, d: disponivel(f, hj) })).filter(x => x.d < 0);
+  if (negativas.length) p.push({
+    nivel: 'grave', rot: `Caixa negativo em ${negativas.map(x => rotuloFonte(x.f)).join(' e ')}`,
+    valor: brl(negativas.reduce((s, x) => s + x.d, 0)),
+    txt: 'Saiu dinheiro de onde não havia. Ou o lançamento é de outra conta, ou falta registrar uma entrada.',
+    acao: "go('razao')", botao: 'Conferir'
+  });
+
+  const vencidos = abertos.filter(t => statusCalc(t) === 'VENCIDO' && t.tipo !== 'ANTECIPACAO' && !ehCaptacao(t));
+  if (vencidos.length) p.push({
+    nivel: 'alto', rot: `${vencidos.length} título(s) vencido(s)`,
+    valor: brl(vencidos.reduce((s, t) => s + t.valor, 0)),
+    txt: `O mais antigo venceu há ${diasEntre(vencidos.map(t => t.dataVenc).sort()[0], hj)} dia(s). O primeiro dia de atraso é o de maior chance de recuperar.`,
+    acao: "carteiraAba='vencido';go('carteira')", botao: 'Ver vencidos'
+  });
+
+  const antAtraso = abertos.filter(t => t.tipo === 'ANTECIPACAO' && statusCalc(t) === 'VENCIDO');
+  if (antAtraso.length) p.push({
+    nivel: 'alto', rot: `${antAtraso.length} antecipação(ões) passaram da data`,
+    valor: brl(antAtraso.reduce((s, t) => s + t.valor, 0)),
+    txt: 'Recurso que já deveria ter voltado. Continua rendendo juros, mas continua fora do caixa.',
+    acao: "go('antecipacoes')", botao: 'Ver antecipações'
+  });
+
+  const hojeVence = abertos.filter(t => t.dataVenc === hj);
+  if (hojeVence.length) p.push({
+    nivel: 'hoje', rot: `${hojeVence.length} vencimento(s) hoje`,
+    valor: brl(hojeVence.reduce((s, t) => s + t.valor, 0)),
+    txt: 'É hoje que se cobra, não amanhã.',
+    acao: "go('carteira')", botao: 'Ver carteira'
+  });
+
+  const jurosPend = abertos.filter(t => !ehCaptacao(t))
+    .reduce((s, t) => { const x = jurosAApropriar(t, hj); return s + (x.dias > 0 ? x.efeito : 0); }, 0);
+  if (Math.abs(jurosPend) > 50) p.push({
+    nivel: 'medio', rot: 'Juros corridos e ainda não reconhecidos', valor: brl(jurosPend),
+    txt: 'O resultado do período está menor do que a realidade até isso ser apropriado.',
+    acao: "abrirApropriar()", botao: 'Apropriar juros'
+  });
+
+  const inflados = typeof retornosInflados === 'function' ? retornosInflados(fs) : [];
+  if (inflados.length) p.push({
+    nivel: 'alto', rot: `${inflados.length} retorno(s) com o principal lançado como receita`,
+    valor: brl(inflados.reduce((s, x) => s + x.entrada, 0)),
+    txt: 'No retorno de antecipação só o juro é receita. Do jeito que está, o lucro aparece maior do que é.',
+    acao: "abrirRetornos()", botao: 'Revisar'
+  });
+
+  const cgAtras = cgParcelas().filter(cgAtrasada);
+  if (cgAtras.length) p.push({
+    nivel: 'alto', rot: `${cgAtras.length} parcela(s) do banco em atraso`,
+    valor: brl(cgAtras.reduce((s, x) => s + x.valor, 0)),
+    txt: 'Parcela de capital de giro vencida e ainda em aberto.',
+    acao: "go('contas')", botao: 'Ver parcelas'
+  });
+
+  const cg7 = cgParcelas().filter(x => !x.pago && x.vencimento >= hj && x.vencimento <= addDias(hj, 7));
+  if (cg7.length) p.push({
+    nivel: 'medio', rot: `${cg7.length} parcela(s) do banco em 7 dias`,
+    valor: brl(cg7.reduce((s, x) => s + x.valor, 0)),
+    txt: `A próxima vence ${fmtBR(cg7.map(x => x.vencimento).sort()[0])}.`,
+    acao: "go('contas')", botao: 'Ver parcelas'
+  });
+
+  const semData = abertos.filter(t => t.tipo === 'ANTECIPACAO' && !t.dataVenc);
+  if (semData.length) p.push({
+    nivel: 'medio', rot: `${semData.length} antecipação(ões) sem data prevista`,
+    valor: brl(semData.reduce((s, t) => s + t.valor, 0)),
+    txt: 'Sem data não há como projetar retorno nem apontar atraso.',
+    acao: "go('antecipacoes')", botao: 'Definir datas'
+  });
+
+  // menor saldo projetado: o dia em que o caixa aperta
+  {
+    const pior = projetarCaixa();
+    if (pior && pior.valor < 0) p.push({
+      nivel: 'alto', rot: `Caixa fica negativo em ${fmtBR(pior.data)}`, valor: brl(pior.valor),
+      txt: 'Pelo que já está contratado, o saldo não cobre os compromissos desse dia.',
+      acao: "go('projecao')", botao: 'Ver fluxo de caixa'
+    });
+  }
+
+  const ordem = { grave: 0, alto: 1, hoje: 2, medio: 3 };
+  return p.sort((a, b) => ordem[a.nivel] - ordem[b.nivel]);
+}
+
+/* O menor saldo projetado nos próximos 90 dias: o dia em que o caixa aperta. */
+function projetarCaixa() {
+  try {
+    const p = projecaoCaixa(90);
+    if (!p || !p.pior) return null;
+    return { data: p.pior.dk, valor: p.pior.saldo };
+  } catch (e) { return null; }
+}
+
+function painelPendencias() {
+  const p = pendencias();
+  if (!p.length) return `<div class="pend-ok">Nada pendente: conciliação fechando, nenhum vencido
+    e os juros em dia. <b>Bom dia para operar.</b></div>`;
+  return `<div class="panel" style="margin-bottom:14px"><div class="panel-head">
+      <h2>O que precisa de você hoje<small>${p.length} ponto(s), do mais urgente para o menos</small></h2></div>
+    <div class="pends">${p.map(x => `<div class="pend ${x.nivel}">
+      <div class="pend-t"><b>${x.rot}</b><span>${esc(x.txt)}</span></div>
+      <div class="pend-v">${x.valor}</div>
+      <div><button class="btn btn-sm" onclick="${x.acao}">${x.botao}</button></div>
+    </div>`).join('')}</div></div>`;
 }
 
 /* =========================================================================
