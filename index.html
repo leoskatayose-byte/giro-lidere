@@ -7109,7 +7109,6 @@ VIEWS.carteira = function () {
   const meus = tits().filter(t => fs.includes(t.fonte) && t.tipo !== 'ANTECIPACAO' && !ehCaptacao(t));
   const abertos = meus.filter(emAberto);
   const vencidos = abertos.filter(t => statusCalc(t) === 'VENCIDO');
-  const aVencer = abertos.filter(t => statusCalc(t) !== 'VENCIDO');
   // A aba de recebidos mostra tudo que foi baixado, antecipação inclusive:
   // é o histórico de quitação, não só o dos títulos de cliente. A contagem
   // precisa ser a mesma da lista, senão o número da aba mente.
@@ -7117,8 +7116,12 @@ VIEWS.carteira = function () {
     && (t.status === 'PAGO' || t.status === 'PERDA'));
   const soma = l => l.reduce((s, t) => s + (t.valor || 0), 0);
 
+  // "Em aberto" é tudo que ainda não foi baixado, vencido inclusive: título que
+  // venceu continua na carteira e continua a receber. Vencidos é um recorte
+  // dele, um atalho para quem vai cobrar — não uma gaveta onde o título some
+  // da lista principal no dia seguinte ao vencimento.
   const abas = [
-    ['aberto', 'Em aberto', aVencer.length, soma(aVencer), ''],
+    ['aberto', 'Em aberto', abertos.length, soma(abertos), ''],
     ['vencido', 'Vencidos', vencidos.length, soma(vencidos), vencidos.length ? 'neg' : ''],
     ['recebido', 'Recebidos', baixados.length, baixados.reduce((s, t) => s + (t.valorRecebido || 0), 0), 'pos']
   ];
@@ -7130,13 +7133,13 @@ VIEWS.carteira = function () {
       <span class="aba-n">${n} título(s)</span>
     </button>`).join('')}</div>`;
 
-  return nav + (carteiraAba === 'recebido' ? VIEWS.recebidos() : listaCarteira(carteiraAba === 'vencido'));
+  return nav + (carteiraAba === 'recebido' ? VIEWS.recebidos() : listaCarteira());
 };
 
-/* A lista de títulos, filtrada pelo recorte da aba. A montagem é a mesma de
-   sempre: só o conjunto muda. */
-function listaCarteira(soVencidos) {
-  return VIEWS.titulos(soVencidos);
+/* A lista de títulos no recorte da aba. Em aberto mostra tudo que não foi
+   baixado; Vencidos filtra os que passaram da data. */
+function listaCarteira() {
+  return VIEWS.titulos(carteiraAba === 'vencido' ? true : undefined);
 }
 
 /* =========================================================================
