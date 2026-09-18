@@ -6343,7 +6343,7 @@ function crSerie(cliente, ate, fs) {
 
   const linhas = [];
   let principal = 0, juros = 0;
-  let pagoJuros = 0, pagoPrincipal = 0, corrigidoTotal = 0;
+  let pagoJuros = 0, pagoPrincipal = 0, corrigidoTotal = 0, excedenteTotal = 0;
   let d = inicio;
   while (d <= fim) {
     const doDia = porDia[d] || [];
@@ -6355,15 +6355,22 @@ function crSerie(cliente, ate, fs) {
     const debito = doDia.reduce((s, e) => s + e.debito, 0);
     const credito = doDia.reduce((s, e) => s + e.credito, 0);
     principal += debito;
-    const abateJuros = Math.min(credito, juros);
+    // O crédito abate juros primeiro e principal depois, e para no zero. Quem
+    // paga mais do que deve não fica com a dívida negativa: a dívida acaba, e
+    // o que entrou além disso é juro cobrado a mais — não crédito a favor
+    // dele. Saldo negativo aqui só confundiria a cobrança do mês seguinte.
+    const abateJuros = Math.min(credito, Math.max(juros, 0));
     juros -= abateJuros;
-    const abatePrincipal = credito - abateJuros;
+    let resto = +(credito - abateJuros).toFixed(6);
+    const abatePrincipal = Math.min(resto, Math.max(principal, 0));
     principal -= abatePrincipal;
+    const excedente = +(resto - abatePrincipal).toFixed(6);
+    excedenteTotal += excedente;
     pagoJuros += abateJuros; pagoPrincipal += abatePrincipal;
 
     if (doDia.length || correcao > 0)
       linhas.push({
-        data: d, correcao, debito, credito, abateJuros, abatePrincipal,
+        data: d, correcao, debito, credito, abateJuros, abatePrincipal, excedente,
         principal: +principal.toFixed(2), juros: +juros.toFixed(2),
         saldo: +(principal + juros).toFixed(2),
         eventos: doDia.filter(e => e.debito || e.credito || e.apropriado)
@@ -6377,7 +6384,7 @@ function crSerie(cliente, ate, fs) {
     enviado: +ev.reduce((s, e) => s + e.debito, 0).toFixed(2),
     recebido: +ev.reduce((s, e) => s + e.credito, 0).toFixed(2),
     pagoJuros: +pagoJuros.toFixed(2), pagoPrincipal: +pagoPrincipal.toFixed(2),
-    corrigido: +corrigidoTotal.toFixed(2)
+    corrigido: +corrigidoTotal.toFixed(2), excedente: +excedenteTotal.toFixed(2)
   };
 }
 
@@ -6435,7 +6442,8 @@ VIEWS.correcao = function () {
     <div class="stat"><div class="k">Juros em aberto</div><div class="v pos">${brl(s.juros)}</div>
       <div class="sub">${brl(s.corrigido)} corridos, ${brl(s.pagoJuros)} já pagos</div></div>
     <div class="stat"><div class="k">Recebido</div><div class="v">${brl(s.recebido)}</div>
-      <div class="sub">${brl(s.pagoJuros)} em juros, ${brl(s.pagoPrincipal)} em principal</div></div>
+      <div class="sub">${brl(s.pagoJuros)} em juros, ${brl(s.pagoPrincipal)} em principal${
+        s.excedente > .005 ? `, ${brl(s.excedente)} a mais` : ''}</div></div>
   </div>`;
 
   // Toda entrada e toda saída da série apontam para uma linha do razão. As que
@@ -6510,8 +6518,13 @@ function crAmortizacao(s) {
         <div class="l"><span>Principal enviado</span><span>${brl(s.enviado)}</span></div>
         <div class="l"><span>Juros corridos no período</span><span class="pos">${brl(s.corrigido)}</span></div>
         <div class="l"><span>Recebido</span><span class="neg">${brl(-s.recebido)}</span></div>
+        ${s.excedente > .005 ? `<div class="l"><span>Recebido além da dívida</span>
+          <span class="pos">${brl(s.excedente)}</span></div>` : ''}
         <div class="l tot"><span>Saldo devedor hoje</span><span>${brl(s.saldo)}</span></div>
-        <div class="conta">O crédito abate juros primeiro e só depois o principal.
+        <div class="conta">${s.excedente > .005
+      ? `<b>${brl(s.excedente)} entraram além do que ele devia.</b> A dívida zerou e não ficou negativa:
+         o que passou disso é juro cobrado a mais, não crédito a favor dele. `
+      : ''}O crédito abate juros primeiro e só depois o principal.
           Nesse ritmo, o saldo de hoje gera <b>${brl(mensal)}</b> de correção nos próximos 30 dias:
           ${so ? 'tudo que entrou até agora só cobriu juro, e o principal não andou.'
         : s.pagoPrincipal > .005 ? `pagamento mensal abaixo disso faz a dívida crescer.`
