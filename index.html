@@ -986,9 +986,25 @@ tr.crmov td{border-bottom-color:var(--line)}
   <div class="modal-body">
     <div class="alert">Um valor só, distribuído entre as antecipações do cliente na ordem da cobrança:
       primeiro os juros, depois o principal, do mais antigo para o mais novo.</div>
-    <div class="fgrid">
-      <div class="field"><label>Data</label><input type="date" id="ra_data" onchange="raCalc()"></div>
-      <div class="field"><label>Valor que entrou</label><input type="number" step="0.01" min="0.01" id="ra_valor" oninput="raCalc()"></div>
+    <div class="field"><label>Como informar</label>
+      <select id="ra_modo" onchange="raCalc()">
+        <option value="AUTO">Informar o total: o sistema separa juros e principal</option>
+        <option value="MANUAL">Informar juros e principal separados</option>
+      </select></div>
+    <div class="field"><label>Data</label><input type="date" id="ra_data" onchange="raCalc()"></div>
+    <div id="ra_autoWrap">
+      <div class="field"><label>Valor que entrou</label>
+        <input type="number" step="0.01" min="0.01" id="ra_valor" oninput="raCalc()"></div>
+    </div>
+    <div id="ra_manualWrap" style="display:none">
+      <div class="fgrid">
+        <div class="field"><label>Juros recebidos</label>
+          <input type="number" step="0.01" min="0" id="ra_juros" oninput="raCalc()">
+          <div class="hint">O valor da sua planilha. Pode ser diferente do que o sistema calcula.</div></div>
+        <div class="field"><label>Principal amortizado</label>
+          <input type="number" step="0.01" min="0" id="ra_principal" oninput="raCalc()">
+          <div class="hint">Abate das antecipações, da mais antiga para a mais nova.</div></div>
+      </div>
     </div>
     <div id="ra_previa"></div>
     <div class="field"><label>Observação</label><textarea id="ra_obs" rows="2"></textarea></div>
@@ -6931,6 +6947,92 @@ function planoRateio(cliente, valor, data, fs) {
   };
 }
 
+/* Plano com os valores ditados: quanto é juro e quanto é principal vem de
+   fora, não da conta. O sistema só distribui entre os títulos.
+
+   O juro informado pode ser maior que o corrido, e é esse o caso comum: a
+   planilha do cliente cobra por um critério combinado que não é o do sistema.
+   A diferença é reconhecida como juro do período do mesmo jeito — quem manda
+   no que se cobra é o acordo, não a fórmula. */
+function planoManual(cliente, juros, principal, data, fs) {
+  const fontes = fs || fontesDoFiltro();
+  const ate = data || hoje();
+  const itens = new Map();
+  const item = t => {
+    if (!itens.has(t.id)) itens.set(t.id, { t, deParcela: 0, deJuros: 0, dePrincipal: 0, jurosAte: null });
+    return itens.get(t.id);
+  };
+
+  const abertas = tits().filter(t => t.cliente === cliente && fontes.includes(t.fonte)
+    && emAberto(t) && t.tipo === 'ANTECIPACAO')
+    .sort((a, b) => (a.dataEntrada || '').localeCompare(b.dataEntrada || ''));
+  const parcelas = tits().filter(t => t.cliente === cliente && fontes.includes(t.fonte)
+    && emAberto(t) && t.tipo === 'JUROS')
+    .sort((a, b) => (a.dataVenc || '').localeCompare(b.dataVenc || ''));
+
+  // 1) o juro informado quita primeiro a parcela já reconhecida, que é direito
+  //    velho, e o que sobrar é juro do período
+  let restaJuros = +(juros || 0).toFixed(2);
+  parcelas.forEach(t => {
+    if (restaJuros <= .005) return;
+    const v = Math.min(restaJuros, t.valor || 0);
+    if (v <= .005) return;
+    item(t).deParcela = +v.toFixed(2);
+    restaJuros = +(restaJuros - v).toFixed(2);
+  });
+
+  // 2) o resto do juro se espalha pelas antecipações, na proporção do que cada
+  //    uma rendeu: é o que mantém o relógio de cada uma coerente com o que foi
+  //    pago dela
+  const corridos = abertas.map(t => ({ t, ...jurosAApropriar(t, ate) }))
+    .filter(x => x.dias > 0 && x.efeito > .005);
+  const somaCorrida = +corridos.reduce((s, x) => s + x.efeito, 0).toFixed(2);
+  const sobraJuros = restaJuros;
+  if (sobraJuros > .005) {
+    const base = corridos.length ? corridos : abertas.map(t => ({ t, efeito: t.valor || 0, dias: 0 }));
+    const total = +base.reduce((s, x) => s + x.efeito, 0).toFixed(2) || 1;
+    let dado = 0;
+    base.forEach((x, i) => {
+      const parte = i === base.length - 1
+        ? +(sobraJuros - dado).toFixed(2)
+        : +(sobraJuros * (x.efeito / total)).toFixed(2);
+      dado = +(dado + parte).toFixed(2);
+      if (parte <= .005) return;
+      const it = item(x.t);
+      it.deJuros = parte;
+      it.jurosCorridos = +x.efeito.toFixed(2);
+      it.dias = x.dias; it.taxa = x.taxa;
+      // o relógio anda até a data quando o juro pago cobre o que correu
+      it.jurosAte = parte >= x.efeito - .005 ? ate : null;
+    });
+  }
+
+  // 3) o principal informado abate do mais antigo para o mais novo
+  let restaPrincipal = +(principal || 0).toFixed(2);
+  abertas.forEach(t => {
+    if (restaPrincipal <= .005) return;
+    const v = Math.min(restaPrincipal, t.valor || 0);
+    if (v <= .005) return;
+    item(t).dePrincipal = +v.toFixed(2);
+    restaPrincipal = +(restaPrincipal - v).toFixed(2);
+  });
+
+  const lista = [...itens.values()];
+  const soma = k => +lista.reduce((s, x) => s + x[k], 0).toFixed(2);
+  return {
+    cliente, data: ate, manual: true, itens: lista,
+    valor: +((juros || 0) + (principal || 0)).toFixed(2),
+    totalParcela: soma('deParcela'), totalJuros: soma('deJuros'), totalPrincipal: soma('dePrincipal'),
+    sobra: +restaPrincipal.toFixed(2),
+    sobraJuros: 0,
+    jurosCorridos: somaCorrida,
+    jurosInformado: +(juros || 0).toFixed(2),
+    aMais: +((juros || 0) - (parcelas.reduce((s, t) => s + (t.valor || 0), 0) + somaCorrida)).toFixed(2),
+    devidoJuros: +parcelas.reduce((s, t) => s + (t.valor || 0), 0).toFixed(2) + somaCorrida,
+    devidoPrincipal: +abertas.reduce((s, t) => s + (t.valor || 0), 0).toFixed(2)
+  };
+}
+
 /* ---------- Tela ---------- */
 function abrirRateio(cliente) {
   rtCli = cliente || crCli;
@@ -6939,7 +7041,10 @@ function abrirRateio(cliente) {
   el('raTit').textContent = `Receber de ${rtCli}`;
   setVal('ra_data', hoje());
   setVal('ra_valor', '');
+  setVal('ra_juros', '');
+  setVal('ra_principal', '');
   setVal('ra_obs', '');
+  setVal('ra_modo', 'AUTO');
   raCalc();
   openModal('ovRateio');
   setTimeout(() => el('ra_valor').focus(), 60);
@@ -6954,9 +7059,21 @@ function raTotalDevido() {
 }
 function raQuitar() { setVal('ra_valor', raTotalDevido().toFixed(2)); raCalc(); }
 
+/* O plano da tela, no modo escolhido. */
+function raPlano() {
+  const data = val('ra_data') || hoje();
+  if (val('ra_modo') === 'MANUAL')
+    return planoManual(rtCli, num(val('ra_juros')) || 0, num(val('ra_principal')) || 0, data);
+  return planoRateio(rtCli, num(val('ra_valor')) || 0, data);
+}
+
 function raCalc() {
-  const v = num(val('ra_valor')), data = val('ra_data') || hoje();
-  const p = planoRateio(rtCli, v, data);
+  const manual = val('ra_modo') === 'MANUAL';
+  el('ra_autoWrap').style.display = manual ? 'none' : 'block';
+  el('ra_manualWrap').style.display = manual ? 'block' : 'none';
+  const data = val('ra_data') || hoje();
+  const p = raPlano();
+  const v = p.valor;
   const box = el('ra_previa');
 
   if (!(v > 0)) {
@@ -6995,12 +7112,18 @@ function raCalc() {
     <div class="memo show">
       <div class="l"><span>Entra no caixa</span><span>${brl(p.valor)}</span></div>
       <div class="l"><span>Abate juros já reconhecidos</span><span>${brl(p.totalParcela)}</span></div>
-      <div class="l"><span>Reconhece juros corridos</span><span class="pos">${brl(p.totalJuros)}</span></div>
+      <div class="l"><span>Reconhece juros do período</span><span class="pos">${brl(p.totalJuros)}</span></div>
       <div class="l"><span>Abate principal</span><span>${brl(p.totalPrincipal)}</span></div>
+      ${manual && Math.abs(p.aMais) > .005 ? `<div class="l"><span>${p.aMais > 0 ? 'Acima' : 'Abaixo'} do que o sistema calculou</span>
+        <span class="${p.aMais > 0 ? 'pos' : 'warntxt'}">${brl(p.aMais)}</span></div>` : ''}
       <div class="l tot"><span>Efeito no resultado</span><span class="pos">${brl(p.totalJuros)}</span></div>
-      <div class="conta">${p.sobra > .005
-      ? `<b class="neg">Sobram ${brl(p.sobra)}</b>: o cliente pagou mais do que as antecipações dele somam.
-         O total devido é ${brl(raTotalDevido())} — o que passar disso precisa ser lançado por fora,
+      <div class="conta">${manual && Math.abs(p.aMais) > .005
+      ? `O juro informado é ${brl(Math.abs(p.aMais))} ${p.aMais > 0 ? 'maior' : 'menor'} que os ${brl(p.devidoJuros)}
+         que o sistema calculou. Vale o que você informou: quem manda no que se cobra é o acordo com o cliente,
+         não a fórmula. ${p.aMais > 0 ? 'A diferença entra como receita de juros do mesmo jeito.' : ''}`
+      : p.sobra > .005
+      ? `<b class="neg">Sobram ${brl(p.sobra)}</b> de principal: é mais do que as antecipações dele somam.
+         O principal em aberto é ${brl(p.devidoPrincipal)} — o que passar disso precisa ser lançado por fora,
          porque título de cliente não entra neste rateio.`
       : `Só o juro corrido entra como receita. A parcela já reconhecida e o principal não passam pelo resultado,
          porque um já foi receita antes e o outro é o seu dinheiro voltando.`}
@@ -7009,19 +7132,27 @@ function raCalc() {
 
 function salvarRateio() {
   limpaErro('ra_erro');
-  const v = num(val('ra_valor')), data = val('ra_data') || hoje();
+  const manual = val('ra_modo') === 'MANUAL';
+  const data = val('ra_data') || hoje();
   const obs = val('ra_obs').trim();
-  if (!(v > 0)) return erro('ra_erro', 'Informe o valor que entrou.');
   if (mesFechado(mesDe(data)))
     return erro('ra_erro', `${mesLabel(mesDe(data))} está fechado. Reabra em Fechamento ou escolha outra data.`);
-  const p = planoRateio(rtCli, v, data);
+  const p = raPlano();
+  const v = p.valor;
+  if (!(v > 0)) return erro('ra_erro', manual
+    ? 'Informe o juro recebido, o principal amortizado, ou os dois.'
+    : 'Informe o valor que entrou.');
   if (!p.itens.length) return erro('ra_erro', 'Não há nada em aberto para abater deste cliente.');
-  if (p.sobra > .005)
-    return erro('ra_erro', `Sobram ${brl(p.sobra)}: o valor é maior que o total devido de ${brl(raTotalDevido())}.`);
+  if (p.sobra > .005) return erro('ra_erro', manual
+    ? `Sobram ${brl(p.sobra)} de principal: o cliente tem ${brl(p.devidoPrincipal)} em aberto.`
+    : `Sobram ${brl(p.sobra)}: o valor é maior que o total devido de ${brl(raTotalDevido())}.`);
 
   confirmar(`Abater <b>${brl(v)}</b> de ${esc(rtCli)} em ${p.itens.length} título(s)?`
     + `<br><br>${brl(p.totalParcela + p.totalJuros)} em juros e ${brl(p.totalPrincipal)} em principal.`
-    + ` Entram ${brl(p.totalJuros)} no resultado, que é o juro corrido reconhecido agora.`
+    + ` Entram ${brl(p.totalJuros)} no resultado.`
+    + (manual && Math.abs(p.aMais) > .005
+      ? `<br><br>O juro informado é <b>${brl(Math.abs(p.aMais))}</b> ${p.aMais > 0 ? 'maior' : 'menor'}`
+        + ` que o calculado pelo sistema. Vale o que você informou.` : '')
     + `<br><br>Sai uma linha por título no razão.`, () => {
 
     const lote = uid();
@@ -7057,12 +7188,13 @@ function salvarRateio() {
         contaId: null, servico: null,
         parcial: !quitou, amortizado: abateTitulo,
         loteRateio: lote, relogioAntes,
-        obs: obs || `Rateio de ${brl(v)} recebidos em ${fmtBR(data)}`, deletedAt: null
+        obs: obs || `${manual ? 'Recebimento com juros e principal informados' : 'Rateio'}`
+          + ` de ${brl(v)} em ${fmtBR(data)}`, deletedAt: null
       });
     });
 
     save(); closeModal('ovRateio'); render();
-    toast(`${brl(v)} de ${rtCli} rateados em ${p.itens.length} título(s)`);
+    toast(`${brl(v)} de ${rtCli} distribuídos em ${p.itens.length} título(s)`);
   }, 'Ratear recebimento');
 }
 
