@@ -791,8 +791,8 @@ tr.crmov td{border-bottom-color:var(--line)}
       <div class="field"><label>Cliente / contraparte</label><input id="at_cli" list="dlClientes" oninput="prev('at_cli','at_cliPrev')"></div>
     </div>
     <div class="cprev" id="at_cliPrev"></div>
-    <div class="field"><label id="at_sacLbl">Sacado</label><input id="at_sac" list="dlSacados">
-      <div class="hint" id="at_sacHint">Quem de fato paga. Deixe vazio se for o próprio cliente.</div></div>
+    <div class="field" id="at_sacWrap"><label id="at_sacLbl">Quem intermediou</label><input id="at_sac" list="dlSacados">
+      <div class="hint" id="at_sacHint">Só para registro. Deixe vazio se o recurso veio direto do investidor.</div></div>
     <div class="field"><label>De quem é o recurso</label>
       <div class="seg sm" id="at_natureza">
         <div class="o" data-v="ANTECIPACAO" onclick="atNatureza('ANTECIPACAO')">Meu — está com o cliente</div>
@@ -811,7 +811,10 @@ tr.crmov td{border-bottom-color:var(--line)}
     <div class="field"><div class="hint">O envio não afeta o resultado. Só no retorno é que a diferença entra como receita
       (juros) ou despesa (perda). Os juros abaixo são projeção — o que vale é o valor confirmado no retorno.</div></div>
     <div id="at_caixa"></div>
-    <div class="field"><label>Observação</label><textarea id="at_obs" rows="2"></textarea></div>
+    <div class="field"><label id="at_obsLbl">Descrição</label><textarea id="at_obs" rows="2"
+        placeholder="Quem paga na ponta, nota, o que identifica este envio"></textarea>
+      <div class="hint" id="at_obsHint">A antecipação é do cliente. Se quem paga é outro, escreva aqui:
+        aparece na lista e no razão, e continua sendo do cliente que se cobra.</div></div>
     <div class="erro" id="at_erro"></div>
   </div>
   <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal('ovAnt')">Cancelar</button>
@@ -1811,6 +1814,11 @@ const retornosInflados = fs => movs()
    Título de cliente continua fora: o ganho dele é o deságio, cobrado de uma
    vez na operação, e cobrar juro por dia em cima seria cobrar duas vezes. */
 const naRua = t => t.tipo === 'ANTECIPACAO' || t.tipo === 'JUROS' || ehCaptacao(t);
+
+/* Como a antecipação se apresenta no razão e nas listas: o número, o cliente,
+   e a descrição quando existe. É ali que mora o nome de quem paga na ponta. */
+const descAnt = t => `${numAntLabel(t.numAntecipacao)} — ${t.cliente || ''}`
+  + (t.obs ? ' · ' + t.obs : '');
 const jurosDesde = t => t.jurosAte || t.dataEntrada;
 function jurosAApropriar(t, ate, taxaEscolhida) {
   const desde = jurosDesde(t);
@@ -2347,7 +2355,12 @@ function ritmoDoMes(mk, linhas) {
    e os testes chamam. */
 VIEWS.titulos = function (soVencidos) {
   const fs = fontesDoFiltro();
-  const lista = tits().filter(t => t.tipo !== 'ANTECIPACAO' && emAberto(t) && fs.includes(t.fonte))
+  // Parcela de juros fica de fora: ela é o juro das antecipações do cliente,
+  // reconhecido e separado para cobrar, não um título comprado com deságio.
+  // Misturada aqui, fazia parecer que o cliente devia uma NF que nunca houve.
+  // Quem cuida dela é a tela de Correção, por cliente.
+  const lista = tits().filter(t => t.tipo !== 'ANTECIPACAO' && t.tipo !== 'JUROS'
+    && emAberto(t) && fs.includes(t.fonte))
     .map(t => ({ ...t, st: statusCalc(t) }));
   const total = lista.reduce((s, t) => s + (t.valor || 0), 0);
   const venc = lista.filter(t => t.st === 'VENCIDO');
@@ -2430,12 +2443,13 @@ VIEWS.antecipacoes = function () {
     + (semData.length ? `<div class="alert"><b>${semData.length} antecipação(ões) sem data prevista de retorno.</b>
       Sem data, o sistema não aponta atraso. Não precisa estar combinado com o cliente ainda: precisa existir uma data.</div>` : '');
 
-  const dados = ordena(filtra(lista, busca.ant, ['cliente', 'sacado']), ordem.ant);
+  const dados = ordena(filtra(lista, busca.ant, ['cliente', 'sacado', 'obs']), ordem.ant);
   const geral = fonteFiltro === 'GERAL';
   const corpo = dados.map(t => `<tr>
       ${geral ? `<td>${fonteTag(t.fonte)}</td>` : ''}
       <td><span class="pill">${numAntLabel(t.numAntecipacao)}</span></td>
-      <td>${cliTag(t.cliente)}</td><td>${esc(t.sacado) || '<span class="muted">—</span>'}</td>
+      <td>${cliTag(t.cliente)}</td>
+      <td class="muted" style="font-size:11.5px">${esc(t.obs || t.sacado) || '—'}</td>
       <td>${fmtBR(t.dataEntrada)}${t.dias > 0 ? `<div class="muted" style="font-size:10.5px">há ${t.dias} dia(s)</div>` : ''}</td>
       <td>${fmtBR(t.dataVenc)}</td>
       <td class="num">${brl(t.valor)}</td>
@@ -2448,11 +2462,11 @@ VIEWS.antecipacoes = function () {
         <button class="btn btn-sm btn-gold" onclick="abrirReceb('${t.id}')">Retorno</button></div></td></tr>`).join('');
 
   return stats + aviso +
-    `<div class="filters">${segFonte()}${campoBusca('ant', 'Buscar cliente, sacado...')}</div>
+    `<div class="filters">${segFonte()}${campoBusca('ant', 'Buscar cliente, descrição...')}</div>
      <div class="panel"><div class="panel-head"><h2>Antecipações em aberto<small>o registro de cada envio: o juro delas é apurado por cliente, na Correção</small></h2>
        <button class="btn btn-sm" onclick="abrirAnt()">+ Antecipação</button></div>
        <div class="tbl-scroll"><table><thead><tr>
-         ${geral ? '<th>Fonte</th>' : ''}<th>Nº</th>${th('ant', 'cliente', 'Cliente')}${th('ant', 'sacado', 'Sacado')}
+         ${geral ? '<th>Fonte</th>' : ''}<th>Nº</th>${th('ant', 'cliente', 'Cliente')}${th('ant', 'obs', 'Descrição')}
          ${th('ant', 'dataEntrada', 'Envio')}${th('ant', 'dataVenc', 'Retorno previsto')}${th('ant', 'valor', 'Valor', 'num')}
          <th>Status</th><th></th></tr></thead>
        <tbody>${corpo || `<tr><td colspan="9"><div class="empty">Nenhuma antecipação em aberto.</div></td></tr>`}</tbody></table></div></div>`;
@@ -2468,7 +2482,8 @@ function irCorrecao(cliente) {
 /* ---------- Recebidos ---------- */
 VIEWS.recebidos = function () {
   const fs = fontesDoFiltro();
-  const lista = tits().filter(t => (t.status === 'PAGO' || t.status === 'PERDA') && fs.includes(t.fonte)).map(t => ({
+  const lista = tits().filter(t => (t.status === 'PAGO' || t.status === 'PERDA')
+    && t.tipo !== 'JUROS' && fs.includes(t.fonte)).map(t => ({
     ...t,
     desagio: (t.valorBruto != null && t.valorLiquido != null) ? t.valorBruto - t.valorLiquido : null,
     atraso: (t.dataVenc && t.dataReceb) ? diasEntre(t.dataVenc, t.dataReceb) : null
@@ -3307,9 +3322,14 @@ function salvarOper() {
   });
   const nfs = linhas.map(l => l.nf).filter(Boolean).join(', ');
   const desc = `Operação ${cli}${nfs ? ' — NF ' + nfs : ''} (${linhas.length} título${linhas.length > 1 ? 's' : ''})`;
-  const dados = { fonte, data, descricao: desc, cliente: cli, tituloId: ultimo, entrada: null, saida: liq, resultado: bruto - liq };
+  // O deságio é a receita da operação: sem conta, ele entra no resultado mas
+  // some da DRE, misturado com tudo que também nasceu sem classificação.
+  const cDes = contaPorChave('receita_desagio');
+  const dados = { fonte, data, descricao: desc, cliente: cli, tituloId: ultimo,
+                  entrada: null, saida: liq, resultado: bruto - liq,
+                  contaId: cDes ? cDes.id : null, servico: cDes ? cDes.servico : null };
   if (editando) Object.assign(DB.movs.find(m => m.operacaoId === editando && m.tipo === 'OPERACAO'), dados);
-  else DB.movs.push({ id: uid(), seq: proximaSeq(), tipo: 'OPERACAO', operacaoId: opId, contaId: null, servico: null, obs: '', deletedAt: null, ...dados });
+  else DB.movs.push({ id: uid(), seq: proximaSeq(), tipo: 'OPERACAO', operacaoId: opId, obs: '', deletedAt: null, ...dados });
   garantirCliente(cli);
   save(); closeModal('ovOper'); render();
   toast(`${editando ? 'Operação atualizada' : 'Operação registrada'} — deságio de ${brl(bruto - liq)}`);
@@ -3341,10 +3361,12 @@ function atNatureza(v) {
   el('at_envioLbl').textContent = cap ? 'Data em que o recurso entrou' : 'Data de envio';
   el('at_valorLbl').textContent = cap ? 'Valor recebido do investidor' : 'Valor enviado';
   el('at_prevLbl').textContent = cap ? 'Data prevista de devolução' : 'Data prevista de retorno';
-  el('at_sacLbl').textContent = cap ? 'Quem intermediou' : 'Sacado';
-  el('at_sacHint').textContent = cap
-    ? 'Só para registro. Deixe vazio se o recurso veio direto do investidor.'
-    : 'Quem de fato paga. Deixe vazio se for o próprio cliente.';
+  // Na antecipação não há sacado: o recurso é do cliente e é dele que se
+  // cobra. Quem paga na ponta, quando é outro, vai na descrição. Na captação
+  // o campo continua, porque ali ele diz quem intermediou o investidor.
+  el('at_sacWrap').style.display = cap ? '' : 'none';
+  el('at_obsLbl').textContent = cap ? 'Observação' : 'Descrição';
+  el('at_obsHint').style.display = cap ? 'none' : '';
   atCalc();
 }
 
@@ -3407,7 +3429,9 @@ function salvarAnt() {
   const efeito = t0 ? +(pesoConc(atNat, v) - pesoConc(t0.tipo, t0.valor)).toFixed(2) : 0;
   if (semEnvio && Math.abs(efeito) >= .005 && mesFechado(mesDe(hoje())))
     return erro('at_erro', `${mesLabel(mesDe(hoje()))} está fechado, e a mudança de valor precisa lançar um ajuste no razão. Reabra o mês em Fechamento.`);
-  const segue = () => salvarAntAgora(id, t0, fonte, cli, sac, envio, prev2, v, taxa, obs);
+  // antecipação não guarda sacado: o campo só existe na captação
+  const segue = () => salvarAntAgora(id, t0, fonte, cli,
+    atNat === 'CAPTACAO' ? sac : '', envio, prev2, v, taxa, obs);
   return confirmaCaixa(atNat === 'CAPTACAO' ? null : atAvisoCaixa(), 'o envio', segue);
 }
 function salvarAntAgora(id, _t0, fonte, cli, sac, envio, prev2, v, taxa, obs) {
@@ -3426,7 +3450,7 @@ function salvarAntAgora(id, _t0, fonte, cli, sac, envio, prev2, v, taxa, obs) {
     // de lado — o lançamento tem que acompanhar a natureza nova.
     if (mv) Object.assign(mv, { fonte, data: envio, cliente: cli,
       entrada: cap ? v : null, saida: cap ? null : v,
-      descricao: cap ? `Captação — ${cli}` : `${numAntLabel(t.numAntecipacao)} — ${cli}` });
+      descricao: cap ? `Captação — ${cli}` : descAnt(t) });
     else {
       // Sem envio no razão, mudar valor ou lado não encontra contrapartida em
       // lugar nenhum e a conciliação passa a acusar a diferença. O ajuste é
@@ -3446,7 +3470,9 @@ function salvarAntAgora(id, _t0, fonte, cli, sac, envio, prev2, v, taxa, obs) {
     }
   } else {
     const numero = Math.max(0, ...DB.titulos.map(t => t.numAntecipacao || 0)) + 1;
-    const tid = uid(), desc = `${numAntLabel(numero)} — ${cli}`;
+    const tid = uid();
+    const desc = atNat === 'CAPTACAO' ? `Captação — ${cli}`
+      : `${numAntLabel(numero)} — ${cli}` + (obs ? ' · ' + obs : '');
     DB.titulos.push({
       id: tid, fonte, cliente: cli, sacado: sac, tipo: atNat, nf: '', emissao: 'NA',
       dataEntrada: envio, dataVenc: prev2 || null, valorBruto: null, valorLiquido: null, valor: v,
@@ -3461,7 +3487,9 @@ function salvarAntAgora(id, _t0, fonte, cli, sac, envio, prev2, v, taxa, obs) {
       descricao: cap ? `Captação — ${cli}` : desc, cliente: cli,
       tituloId: tid, operacaoId: null,
       entrada: cap ? v : null, saida: cap ? null : v, resultado: null,
-      contaId: null, servico: null, obs: '', deletedAt: null
+      // não mexe no resultado: é o dinheiro trocando de lugar, não ganho
+      contaId: (contaPorChave('patrimonial_antecipacao_enviada') || {}).id || null,
+      servico: null, obs: '', deletedAt: null
     });
   }
   garantirCliente(cli); garantirSacado(sac);
@@ -3694,7 +3722,10 @@ function salvarReceb() {
       cliente: quem, tituloId: t.id, operacaoId: null,
       entrada: cap ? null : v, saida: cap ? v : null,
       resultado: j ? (cap ? -j : j) : null,
-      contaId: null, servico: null,
+      // o juro cobrado na baixa parcial é receita, e a conta sai da natureza:
+      // antecipação e captação têm a sua, título de cliente tem a dele
+      contaId: j ? ((contaPorChave(naRua(t) ? chaveJuros(t) : 'receita_juros') || {}).id || null) : null,
+      servico: j ? 'GIRO' : null,
       parcial: true, amortizado: amort,
       obs: `Restou ${brl(t.valor)} em aberto`, deletedAt: null
     });
@@ -4064,7 +4095,9 @@ function salvarProrrog() {
     const desc = `Prorrogação ${t.cliente}${t.nf ? ' — NF ' + t.nf : ''} (${dias} dia(s))`;
     const comum = {
       id: uid(), seq: proximaSeq(), fonte: t.fonte, data: dataJuro, tipo: 'PRORROGACAO', cliente: t.cliente,
-      tituloId: t.id, operacaoId: null, resultado: j, contaId: null, servico: null, obs: '', deletedAt: null
+      tituloId: t.id, operacaoId: null, resultado: j,
+      contaId: (contaPorChave('receita_prorrogacao') || {}).id || null, servico: 'GIRO',
+      obs: '', deletedAt: null
     };
     if (forma === 'TITULO') {
       // juro embutido: o título cresce e o resultado sobe sem passar pelo caixa
@@ -7148,7 +7181,9 @@ function salvarRateio() {
         entrada: total, saida: null,
         // só o juro corrido é receita; o resto já era direito ou é principal
         resultado: x.deJuros > .005 ? x.deJuros : null,
-        contaId: null, servico: null,
+        // só o juro é receita, e ele entra na conta da natureza do título
+        contaId: x.deJuros > .005 ? ((contaPorChave(chaveJuros(t)) || {}).id || null) : null,
+        servico: x.deJuros > .005 ? 'GIRO' : null,
         parcial: !quitou, amortizado: abateTitulo,
         loteRateio: lote, relogioAntes,
         obs: obs || `${manual ? 'Recebimento com juros e principal informados' : 'Rateio'}`
@@ -7201,13 +7236,16 @@ function carteiraIr(a) { carteiraAba = a; render(); }
 
 VIEWS.carteira = function () {
   const fs = fontesDoFiltro();
-  const meus = tits().filter(t => fs.includes(t.fonte) && t.tipo !== 'ANTECIPACAO' && !ehCaptacao(t));
+  // A carteira é de título operado. Antecipação, captação e parcela de juros
+  // têm tela própria, e cada uma conta uma história diferente.
+  const meus = tits().filter(t => fs.includes(t.fonte) && t.tipo !== 'ANTECIPACAO'
+    && t.tipo !== 'JUROS' && !ehCaptacao(t));
   const abertos = meus.filter(emAberto);
   const vencidos = abertos.filter(t => statusCalc(t) === 'VENCIDO');
   // A aba de recebidos mostra tudo que foi baixado, antecipação inclusive:
   // é o histórico de quitação, não só o dos títulos de cliente. A contagem
   // precisa ser a mesma da lista, senão o número da aba mente.
-  const baixados = tits().filter(t => fs.includes(t.fonte)
+  const baixados = tits().filter(t => fs.includes(t.fonte) && t.tipo !== 'JUROS'
     && (t.status === 'PAGO' || t.status === 'PERDA'));
   const soma = l => l.reduce((s, t) => s + (t.valor || 0), 0);
 
