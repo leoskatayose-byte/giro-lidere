@@ -1214,40 +1214,18 @@ tr.crmov td{border-bottom-color:var(--line)}
     <button class="btn btn-gold" onclick="salvarReclass()">Salvar</button></div>
 </div></div>
 
-<!-- ===================== Apropriar juros ===================== -->
-<div class="overlay" id="ovApropriar"><div class="modal wide">
-  <div class="modal-head"><h3>Apropriar juros das antecipações</h3><button class="modal-x" onclick="closeModal('ovApropriar')">×</button></div>
+<!-- ===================== Juros do mes ===================== -->
+<div class="overlay" id="ovJurosMes"><div class="modal wide">
+  <div class="modal-head"><h3 id="jmTit">Juros do mes</h3><button class="modal-x" onclick="closeModal('ovJurosMes')">&times;</button></div>
   <div class="modal-body">
-    <div class="alert">Reconhece o que já foi ganho (ou devido) nas antecipações que continuam abertas,
-      sem esperar o dinheiro voltar. Cada antecipação guarda até quando os juros já foram reconhecidos,
-      então rodar de novo no mês que vem não conta o mesmo período duas vezes.</div>
-    <div class="fgrid">
-      <div class="field"><label>Cliente</label><select id="ap_cliente" onchange="calcApropriar()"></select></div>
-      <div class="field"><label>Apropriar até</label><input type="date" id="ap_ate" oninput="calcApropriar()" onchange="calcApropriar()"></div>
-    </div>
-    <div class="filters" style="margin:0 0 10px">
-      <button class="btn btn-sm" onclick="apMarcar(true)">Marcar todos</button>
-      <button class="btn btn-sm" onclick="apMarcar(false)">Desmarcar todos</button>
-      <span style="flex:1"></span>
-      <label style="font-size:12.5px;color:var(--dim)">Aplicar taxa aos marcados</label>
-      <input type="number" step="0.01" min="0" id="ap_taxaTodos" style="max-width:88px" placeholder="% ao mês">
-      <button class="btn btn-sm" onclick="apTaxaTodos()">Aplicar</button>
-    </div>
-    <div id="ap_previa"></div>
-    <div id="ap_rodape"></div>
-    <div class="field"><label>O que fazer com os juros</label>
-      <select id="ap_destino" onchange="atualizaDestino()">
-        <option value="SEPARADO">Criar um título de juros a receber, separado</option>
-        <option value="SOMAR">Somar ao valor de cada antecipação</option>
-      </select>
-      <div class="hint" id="ap_hint"></div></div>
-    <div id="ap_contas"></div>
-    <div class="memo" id="ap_efeito"></div>
-    <div id="ap_hist"></div>
-    <div class="erro" id="ap_erro"></div>
+    <div class="alert" id="jm_aviso"></div>
+    <div id="jm_previa"></div>
+    <div class="memo" id="jm_efeito"></div>
+    <div id="jm_hist"></div>
+    <div class="erro" id="jm_erro"></div>
   </div>
-  <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal('ovApropriar')">Cancelar</button>
-    <button class="btn btn-gold" onclick="salvarApropriar()">Apropriar</button></div>
+  <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal('ovJurosMes')">Fechar</button>
+    <button class="btn btn-gold" id="jm_ok" onclick="salvarJurosMes()">Reconhecer</button></div>
 </div></div>
 
 <!-- ===================== Aportar em título ===================== -->
@@ -1920,7 +1898,7 @@ const SECAO = {
   clientes: ['Clientes', 'Quanto cada um deve hoje, a correção dia a dia e os cadastros'],
   resultado: ['Resultado', 'Receitas e despesas por conta, com comparativo do período anterior'],
   projecao: ['Fluxo de caixa', 'O que já está contratado, dia a dia, a partir do saldo de hoje'],
-  fechamento: ['Fechamento', 'Mês conferido vira mês travado — e reabrir é um clique'],
+  fechamento: ['Fechamento', 'Reconhecer os juros do mês, conferir e travar. Reabrir é um clique'],
   contas: ['Parcelas bancárias', 'Parcelas dos contratos de capital de giro tomado no banco'],
   cadastros: ['Fontes e taxas', 'Contas de origem, taxas padrão e regime de juros'],
   conferencia: ['Conferência', 'Se o que saiu menos o que voltou bate com o que está em aberto'],
@@ -4749,10 +4727,18 @@ function alternarFechamento(mk) {
   if (i >= 0) { fechados.splice(i, 1); save(); render(); toast(`${mesLabel(mk)} reaberto`); return; }
   const c = conc('GERAL');
   const fechar = () => { fechados.push(mk); fechados.sort(); save(); render(); toast(`${mesLabel(mk)} fechado`); };
-  if (!c.bate) {
-    confirmar(`A conciliação geral está com ${brl(c.dif)} de diferença. Fechar assim congela um mês que não bate. Confirma mesmo assim?`,
-      fechar, 'Fechar mês com diferença');
-  } else fechar();
+  // Reconhecer os juros é parte do fechamento, não um extra: mês travado sem
+  // eles congela um resultado menor do que o real, e corrigir depois exige
+  // reabrir. O aviso vem antes da trava, que é quando ainda é barato.
+  const semJuros = !jmFeito(mk);
+  const pend = [];
+  if (semJuros) pend.push('os juros do mês ainda não foram reconhecidos');
+  if (!c.bate) pend.push(`a conciliação geral está com ${brl(c.dif)} de diferença`);
+  if (!pend.length) return fechar();
+  confirmar(`Fechar ${esc(mesLabel(mk))} assim mesmo?<br><br>`
+    + pend.map(x => '• ' + x).join('<br>')
+    + `<br><br>Mês fechado não aceita alteração${semJuros ? ', e reconhecer os juros depois exigiria reabrir' : ''}.`,
+    fechar, 'Fechar mês com pendência');
 }
 
 /* ---------- Projeção de caixa ----------
@@ -4878,12 +4864,19 @@ function tabelaProjecao(p) {
 
 /* ---------- Fechamento: view ---------- */
 VIEWS.fechamento = function () {
-  const ms = mesesComMov();
+  // Todos os meses desde o primeiro lançamento, inclusive os sem movimento:
+  // mês parado não tem o que travar, mas tem juro correndo para reconhecer.
+  const ms = jmMeses().slice().reverse();
   const fechados = mesesFechados();
+  // Mês que já passou e ainda não teve os juros reconhecidos é trabalho
+  // parado: o resultado dele está menor do que a realidade até isso rodar.
+  const pendJuros = jmPendentes();
   const stats = `<div class="stats">
     <div class="stat"><div class="k">Meses com movimento</div><div class="v">${ms.length}</div><div class="sub">no histórico</div></div>
     <div class="stat"><div class="k">Fechados</div><div class="v pos">${fechados.length}</div><div class="sub">travados contra alteração</div></div>
     <div class="stat"><div class="k">Abertos</div><div class="v">${ms.filter(m => !mesFechado(m)).length}</div><div class="sub">ainda aceitam lançamento</div></div>
+    <div class="stat"><div class="k">Sem juros reconhecidos</div><div class="v ${pendJuros.length ? 'warntxt' : 'pos'}">${pendJuros.length}</div>
+      <div class="sub">${pendJuros.length ? 'o resultado desses meses está incompleto' : 'todo mês encerrado já rodou'}</div></div>
   </div>`;
   const linhas = ms.map(mk => {
     const linhasMes = razaoDoMes(mk, fontesGeral());
@@ -4891,21 +4884,36 @@ VIEWS.fechamento = function () {
     const fim = ultimoDia(mk);
     const sd = fontesGeral().reduce((s, f) => s + saldo(f, fim), 0);
     const fech = mesFechado(mk);
+    const jFeito = jmFeito(mk), jLote = jmLote(mk);
+    const encerrado = fim <= hoje();
     return `<tr>
       <td><b>${esc(mesLabel(mk))}</b></td>
       <td class="num">${linhasMes.length}</td>
       <td class="num ${res < 0 ? 'neg' : 'pos'}">${brl(res)}</td>
       <td class="num">${brl(sd)}</td>
+      <td>${jFeito ? `<span class="chip chip-ok">reconhecidos</span>${jLote ? `<div class="crtag">${brl(jLote.total)}</div>` : ''}`
+      : encerrado ? '<span class="chip chip-warn">pendentes</span>'
+        : '<span class="chip chip-n">mês em curso</span>'}</td>
       <td>${fech ? '<span class="chip chip-ok">fechado</span>' : '<span class="chip chip-n">aberto</span>'}</td>
-      <td><div class="acoes"><button class="btn btn-sm ${fech ? '' : 'btn-gold'}" onclick="alternarFechamento('${mk}')">${fech ? 'Reabrir' : 'Fechar mês'}</button></div></td></tr>`;
+      <td><div class="acoes">
+        <button class="btn btn-sm ${!jFeito && encerrado && !fech ? 'btn-gold' : ''}" onclick="abrirJurosMes('${mk}')">Juros do mês</button>
+        <button class="btn btn-sm ${fech ? '' : 'btn-gold'}" onclick="alternarFechamento('${mk}')">${fech ? 'Reabrir' : 'Fechar mês'}</button></div></td></tr>`;
   }).join('');
-  return stats + `<div class="alert">Mês fechado não aceita lançamento novo, edição nem importação com data dentro dele —
-    nem baixa de título naquela data. É o que impede a conciliação já conferida de mudar sozinha depois.
-    Reabrir é um clique, e o app avisa se você fechar um mês que não bate.</div>
+  // O mais antigo primeiro: reconhecer fora de ordem juntaria meses.
+  const proxPend = pendJuros.length ? pendJuros[0] : '';
+  const chamada = pendJuros.length ? `<div class="alert">
+      <b>${pendJuros.length} mês(es) encerrado(s) ainda sem os juros reconhecidos.</b>
+      <button class="btn btn-sm right btn-gold" onclick="abrirJurosMes('${proxPend}')">Reconhecer ${esc(mesLabel(proxPend))}</button>
+      Enquanto não rodar, o resultado desses meses está menor do que a realidade: o juro correu, o dinheiro
+      só não voltou ainda. O lançamento não passa pelo caixa.</div>` : '';
+  return stats + chamada + `<div class="alert">O fechamento tem dois passos: reconhecer os juros do mês e travar o mês.
+    Mês fechado não aceita lançamento novo, edição nem importação com data dentro dele, nem baixa de título
+    naquela data. É o que impede a conciliação já conferida de mudar sozinha depois.
+    Reabrir é um clique, e o app avisa se você fechar um mês que não bate ou que ainda não teve os juros.</div>
     <div class="panel"><div class="panel-head"><h2>Meses<small>do mais recente para o mais antigo</small></h2></div>
     <div class="tbl-scroll"><table><thead><tr><th>Mês</th><th class="num">Lanç.</th><th class="num">Resultado</th>
-      <th class="num">Saldo no fim</th><th>Situação</th><th></th></tr></thead>
-    <tbody>${linhas || '<tr><td colspan="6"><div class="empty">Nenhum mês com movimento.</div></td></tr>'}</tbody></table></div></div>`;
+      <th class="num">Saldo no fim</th><th>Juros do mês</th><th>Situação</th><th></th></tr></thead>
+    <tbody>${linhas || '<tr><td colspan="7"><div class="empty">Nenhum mês com movimento.</div></td></tr>'}</tbody></table></div></div>`;
 };
 
 /* =========================================================================
@@ -5181,183 +5189,38 @@ function salvarReclass() {
 }
 
 /* =========================================================================
-   Apropriar juros e Aportar em título
+   Reconhecimento de juros e Aporte em título
    ---------------------------------------------------------------------------
-   Duas operações que faltavam e que têm a mesma exigência: mexer no que está
-   na rua sem quebrar saldo + títulos = montante.
+   Duas operações com a mesma exigência: mexer no que está na rua sem quebrar
+   saldo + títulos = montante.
 
-   APROPRIAR JUROS — reconhece o que já foi ganho numa antecipação que continua
-   aberta. Títulos sobem J e o montante sobe J (o resultado). O caixa não se
-   move, e a conta fecha.
+   RECONHECER JUROS — o que já foi ganho numa antecipação que continua aberta.
+   Títulos sobem J e o montante sobe J (o resultado). O caixa não se move, e a
+   conta fecha. Quem decide quando isso acontece é a rotina de fim de mês, em
+   Fechamento: aqui fica só o motor, porque o desfazer precisa dele para
+   devolver ao estado anterior.
 
    APORTAR — pagar uma parcela de consórcio, por exemplo: o dinheiro sai do
    caixa mas não é despesa, vira cota. Saldo cai V, títulos sobem V, montante
    fica igual. Fecha também.
    ========================================================================= */
 
-/* ---------- Apropriar juros ----------
-   A lista traz tudo que pode render — antecipação, captação e título de
-   cliente já vencido — e quem escolhe o que entra é quem está lançando. A
-   taxa de cada linha é editável ali mesmo, porque nem todo cliente tem a
-   mesma, e a conta contábil sai da natureza de cada um: retorno de
-   antecipação numa conta, juro de título em outra, custo de captação numa
-   terceira. Por isso o razão pode sair com mais de uma linha. */
-let apJuros = { linhas: [], cliente: '', ate: '', sel: {}, taxas: {} };
+/* ---------- Motor do reconhecimento ----------
+   Recebe as linhas já calculadas (título + juro do período) e aplica os três
+   lados de uma vez: a parcela cobrável do cliente, o valor da captação e o
+   lançamento de resultado. Devolve o lote, que é a fotografia do antes — sem
+   ela, desfazer viraria adivinhação, porque não dá para saber até quando os
+   juros já tinham sido reconhecidos antes desta rodada.
 
-function abrirApropriar(cliente) {
-  const ate = hoje();
-  setVal('ap_ate', ate);
-  const cands = apCandidatos(ate, '');
-  el('ap_cliente').innerHTML = `<option value="">Todos os clientes</option>` +
-    [...new Set(cands.map(t => t.cliente))]
-      .sort((a, b) => a.localeCompare(b, 'pt-BR'))
-      .map(c => `<option value="${esc(c)}" ${c === cliente ? 'selected' : ''}>${esc(c)}</option>`).join('');
-  setVal('ap_destino', 'SEPARADO');
-  setVal('ap_taxaTodos', '');
-  apJuros.sel = {}; apJuros.taxas = {};
-  limpaErro('ap_erro');
-  calcApropriar();
-  openModal('ovApropriar');
-}
-
-/* Só antecipação e captação rendem juros por dia. Título de cliente ganha no
-   deságio, cobrado de uma vez na operação: cobrar juro dele aqui seria cobrar
-   duas vezes pela mesma coisa. Para título que atrasou existe a prorrogação,
-   que é combinada com o cliente e tem tarifa própria. */
-function apCandidatos(ate, cli) {
-  return tits().filter(t => emAberto(t) && naRua(t) && (!cli || t.cliente === cli));
-}
-const apPadraoMarcado = () => true;
-function apMarcado(t) {
-  return apJuros.sel[t.id] === undefined ? apPadraoMarcado(t) : !!apJuros.sel[t.id];
-}
-function apAlterna(id, on) { apJuros.sel[id] = on; calcApropriar(); }
-function apMarcar(on) {
-  apJuros.linhas.forEach(x => { apJuros.sel[x.t.id] = on; });
-  calcApropriar();
-}
-function apTaxa(id, v) {
-  const n = num(v);
-  if (isFinite(n) && n >= 0) apJuros.taxas[id] = n; else delete apJuros.taxas[id];
-  calcApropriar();
-}
-function apTaxaTodos() {
-  const n = num(val('ap_taxaTodos'));
-  if (!isFinite(n) || n < 0) return toast('Informe uma taxa válida');
-  apJuros.linhas.filter(x => x.on).forEach(x => { apJuros.taxas[x.t.id] = n; });
-  calcApropriar();
-  toast(`Taxa de ${fmtTaxa(n)}% aplicada aos marcados`);
-}
-
-function calcApropriar() {
-  const ate = val('ap_ate'), cli = val('ap_cliente');
-  apJuros.ate = ate; apJuros.cliente = cli;
-  apJuros.linhas = apCandidatos(ate, cli)
-    .map(t => ({ t, on: apMarcado(t), ...jurosAApropriar(t, ate, apJuros.taxas[t.id]) }))
-    .filter(x => x.dias > 0 && Math.abs(x.juros) > .005)
-    .sort((a, b) => (a.desde || '').localeCompare(b.desde || ''));
-
-  const marcadas = apJuros.linhas.filter(x => x.on);
-  const total = marcadas.reduce((s, x) => s + x.efeito, 0);
-  const emAberto2 = marcadas.reduce((s, x) => s + (x.t.valor || 0), 0);
-
-  if (!apJuros.linhas.length) {
-    el('ap_previa').innerHTML = `<div class="empty">Nada a apropriar até ${fmtBR(ate)}${cli ? ' para ' + esc(cli) : ''}.
-      Ou os juros já foram reconhecidos até essa data, ou não há antecipação em aberto deste cliente.</div>`;
-    el('ap_rodape').innerHTML = ''; el('ap_contas').innerHTML = '';
-    el('ap_efeito').classList.remove('show');
-    el('ap_hist').innerHTML = apHistorico();
-    return;
-  }
-  el('ap_previa').innerHTML = `<div class="tbl-scroll" style="max-height:36vh;overflow-y:auto"><table>
-    <thead><tr><th style="width:28px"></th><th>Cliente</th><th>O que é</th><th>Juros desde</th><th class="num">Dias</th>
-      <th class="num">Em aberto</th><th class="num" style="width:92px">Taxa % mês</th><th class="num">Juros</th></tr></thead>
-    <tbody>${apJuros.linhas.map(x => `<tr class="${x.on ? '' : 'apoff'}">
-      <td><input type="checkbox" ${x.on ? 'checked' : ''} onchange="apAlterna('${x.t.id}', this.checked)"></td>
-      <td>${cliTag(x.t.cliente)}${x.t.sacado && x.t.sacado !== x.t.cliente ? `<div class="muted" style="font-size:10px">sacado ${esc(x.t.sacado)}</div>` : ''}</td>
-      <td>${apNatureza(x.t)}</td>
-      <td>${fmtBR(x.desde)}${x.t.jurosAte ? ' <span class="chip chip-ok">já apropriado antes</span>' : ''}</td>
-      <td class="num">${x.dias}</td>
-      <td class="num">${brl(x.t.valor)}</td>
-      <td class="num"><input type="number" step="0.01" min="0" class="inl inl-xs" value="${x.taxa}"
-        onchange="apTaxa('${x.t.id}', this.value)"></td>
-      <td class="num ${x.efeito < 0 ? 'neg' : 'pos'}">${brl(x.efeito)}</td></tr>`).join('')}
-    </tbody></table></div>`;
-  el('ap_rodape').innerHTML = `<div class="somatit ${!marcadas.length ? 'erro' : total < 0 ? 'erro' : 'ok'}">
-    ${marcadas.length} de ${apJuros.linhas.length} marcado(s) · ${brl(emAberto2)} em aberto ·
-    juros a reconhecer: <b>${brl(total)}</b>${total < 0 ? ' (despesa — recurso de terceiro)' : ''}</div>`;
-  atualizaDestino();
-}
-
-function apNatureza(t) {
-  if (ehCaptacao(t)) return '<span class="chip chip-bad">captação — custo</span>';
-  return `<span class="chip chip-ok">antecipação</span>`;
-}
-
-/* Uma linha de razão por conta: misturar retorno de antecipação com juro de
-   título num lançamento só apagaria justamente a informação que o plano de
-   contas existe para guardar. */
-function apPorConta() {
-  const g = {};
-  apJuros.linhas.filter(x => x.on).forEach(x => {
-    const ch = chaveJuros(x.t);
-    (g[ch] = g[ch] || { chave: ch, conta: contaPorChave(ch), linhas: [], grupos: {} });
-    g[ch].linhas.push(x);
-    const k = x.t.cliente + '|' + x.t.fonte;
-    (g[ch].grupos[k] = g[ch].grupos[k] || []).push(x.efeito);
-  });
-  // arredonda por cliente e fonte, que é como o salvar agrupa — senão a prévia
-  // sai um centavo diferente do que vai ser lançado
-  return Object.values(g).map(x => ({
-    ...x,
-    total: +Object.values(x.grupos)
-      .reduce((s, arr) => s + +arr.reduce((a, v) => a + v, 0).toFixed(2), 0).toFixed(2)
-  }));
-}
-
-function atualizaDestino() {
-  const marcadas = apJuros.linhas.filter(x => x.on);
-  const total = +marcadas.reduce((s, x) => s + x.efeito, 0).toFixed(2);
-  const destino = val('ap_destino');
-  const grupos = apPorConta();
-  el('ap_hint').innerHTML = destino === 'SEPARADO'
-    ? `Cria <b>um título de juros a receber por conta</b>, com vencimento em ${fmtBR(val('ap_ate'))}.
-       Como ele vence antes das antecipações, aparece primeiro na lista — e é o primeiro a ser amortizado quando o cliente mandar recurso.`
-    : `Soma os juros ao valor de <b>cada título</b>. Simples, mas os juros deixam de ser cobráveis em separado.`;
-  el('ap_contas').innerHTML = !grupos.length ? '' :
-    `<div class="memo show"><div class="l" style="font-weight:600"><span>Vai para o plano de contas assim</span><span></span></div>
-      ${grupos.map(g => `<div class="l"><span>${esc(g.conta ? g.conta.nome : g.chave)}
-        <i class="muted" style="font-style:normal">· ${g.linhas.length} lançamento(s)</i></span>
-        <span class="${g.total < 0 ? 'neg' : 'pos'}">${brl(g.total)}</span></div>`).join('')}
-      <div class="conta">A conta sai da natureza de cada linha: antecipação vai para retorno de antecipação,
-        título de cliente vai para juros, e captação vira custo.</div></div>`;
-  el('ap_efeito').innerHTML = `<div class="l"><span>Em aberto (títulos)</span><span class="${total < 0 ? 'neg' : 'pos'}">${brl(total)}</span></div>
-    <div class="l"><span>Patrimônio do giro</span><span class="${total < 0 ? 'neg' : 'pos'}">${brl(total)}</span></div>
-    <div class="l"><span>Caixa</span><span class="muted">não se move</span></div>
-    <div class="l tot"><span>Conciliação</span><span class="pos">continua fechando</span></div>
-    <div class="conta">Nada passa pelo caixa: só o direito cresce, e o montante acompanha.
-      A taxa que você ajustar aqui fica gravada no título para as próximas apropriações.</div>`;
-  el('ap_efeito').classList.add('show');
-  el('ap_hist').innerHTML = apHistorico();
-}
-
-function salvarApropriar() {
-  limpaErro('ap_erro');
-  const ate = val('ap_ate'), destino = val('ap_destino');
-  if (!ate) return erro('ap_erro', 'Informe a data de corte.');
-  const marcadas = apJuros.linhas.filter(x => x.on);
-  if (!marcadas.length) return erro('ap_erro', 'Marque pelo menos um título para apropriar.');
-  if (mesFechado(mesDe(ate)))
-    return erro('ap_erro', `${mesLabel(mesDe(ate))} está fechado. Reabra em Fechamento ou escolha outra data de corte.`);
-
-  const bruto = +marcadas.reduce((s, x) => s + x.efeito, 0).toFixed(2);
-  const cli = apJuros.cliente;
-  // Fotografia do antes: sem ela, desfazer viraria adivinhação — não dá para
-  // saber até quando os juros já tinham sido reconhecidos antes desta rodada.
+   Só antecipação e captação entram: título de cliente ganha no deságio,
+   cobrado de uma vez na operação, e cobrar juro dele aqui seria cobrar duas
+   vezes pela mesma coisa. */
+function aplicarJuros(linhas, ate, rotulo) {
+  const bruto = +linhas.reduce((s, x) => s + x.efeito, 0).toFixed(2);
   const lote = {
-    id: uid(), ate, cliente: cli, destino, quando: new Date().toISOString(),
-    total: bruto, n: marcadas.length,
-    antes: marcadas.map(x => ({
+    id: uid(), ate, cliente: rotulo || '', destino: 'SEPARADO',
+    quando: new Date().toISOString(), total: bruto, n: linhas.length,
+    antes: linhas.map(x => ({
       id: x.t.id, valor: x.t.valor,
       jurosAte: x.t.jurosAte === undefined ? null : x.t.jurosAte,
       taxa: x.t.taxaMensal === undefined ? null : x.t.taxaMensal,
@@ -5366,7 +5229,7 @@ function salvarApropriar() {
     criou: [], somou: [], movs: []
   };
   // O lançamento de resultado tem que valer exatamente o que foi aplicado nos
-  // títulos, centavo a centavo — somar por fora arredondaria diferente e a
+  // títulos, centavo a centavo: somar por fora arredondaria diferente e a
   // conciliação fecharia com um centavo de sobra.
   const acum = {};
   const efeito = (fonte, chave, v) => {
@@ -5374,94 +5237,83 @@ function salvarApropriar() {
     acum[k] = { fonte, chave, valor: +((acum[k] ? acum[k].valor : 0) + v).toFixed(2) };
   };
 
-  if (destino === 'SEPARADO') {
-    // Uma parcela de juros POR CLIENTE, por fonte e por conta. Por cliente
-    // porque é assim que se cobra: o Sidney tem a parcela dele, a Lika a dela.
-    // Por fonte porque cada uma concilia sozinha, e por conta porque juro de
-    // título e retorno de antecipação não são a mesma receita.
-    const grupos = {};
-    marcadas.filter(x => !x.custo).forEach(x => {
-      const k = x.t.cliente + '|' + x.t.fonte + '|' + chaveJuros(x.t);
-      (grupos[k] = grupos[k] || { cliente: x.t.cliente, fonte: x.t.fonte, chave: chaveJuros(x.t), linhas: [] }).linhas.push(x);
-    });
-    Object.values(grupos).forEach(g => {
-      const valorRec = +g.linhas.reduce((s, x) => s + x.efeito, 0).toFixed(2);
-      const conta = contaPorChave(g.chave);
-      efeito(g.fonte, g.chave, valorRec);
-      // o que entrou nesta rodada, guardado para o extrato conseguir abrir
-      const rodada = {
-        ate, valor: valorRec, lote: lote.id,
-        itens: g.linhas.map(x => ({
-          tituloId: x.t.id, tipo: x.t.tipo, num: x.t.numAntecipacao || null,
-          nf: x.t.nf || '', enviadaEm: x.t.dataEntrada, base: +(x.t.valor || 0).toFixed(2),
-          desde: x.desde, dias: x.dias, taxa: x.taxa, juros: +x.efeito.toFixed(2)
-        }))
-      };
-      // Parcela que já existe em aberto continua a mesma: ela cresce e o
-      // vencimento anda para a nova data de corte. Criar uma nova a cada
-      // rodada encheria a lista de pedaços do mesmo acerto.
-      const aberta = tits().find(t => t.tipo === 'JUROS' && emAberto(t)
-        && t.cliente === g.cliente && t.fonte === g.fonte
-        && (t.contaId || null) === (conta ? conta.id : null));
-      if (aberta) {
-        lote.somou.push({
-          id: aberta.id, valor: aberta.valor, dataVenc: aberta.dataVenc,
-          obs: aberta.obs, rodadas: (aberta.composicao || []).length
-        });
-        aberta.valor = +(aberta.valor + valorRec).toFixed(2);
-        aberta.dataVenc = ate;
-        aberta.composicao = (aberta.composicao || []).concat([rodada]);
-        aberta.obs = `${conta ? conta.nome : 'Juros'} de ${esc(g.cliente)} — `
-          + `${aberta.composicao.length} apropriação(ões), a última até ${fmtBR(ate)}`;
-      } else {
-        const novoId = uid();
-        lote.criou.push(novoId);
-        DB.titulos.push({
-          id: novoId, fonte: g.fonte, cliente: g.cliente, sacado: '', tipo: 'JUROS',
-          nf: '', emissao: 'NA', dataEntrada: ate, dataVenc: ate,
-          valorBruto: null, valorLiquido: null, valor: valorRec, status: 'A_VENCER',
-          dataReceb: null, valorRecebido: null,
-          // a categoria fica no próprio título, não só no lançamento
-          contaId: conta ? conta.id : null,
-          composicao: [rodada],
-          obs: `${conta ? conta.nome : 'Juros'} de ${esc(g.cliente)} — 1 apropriação, até ${fmtBR(ate)}`,
-          operacaoId: null, numAntecipacao: null, taxaMensal: null, jurosAte: null,
-          loteApropriacao: lote.id, deletedAt: null
-        });
-      }
-    });
-    // Captação nunca vira título a receber: dizer que há mais a receber por
-    // causa de um custo seria mentir. O juro devido engorda a própria dívida.
-    marcadas.filter(x => x.custo).forEach(x => {
-      const antes = x.t.valor;
-      x.t.valor = +(antes + x.juros).toFixed(2);
-      efeito(x.t.fonte, chaveJuros(x.t), -(x.t.valor - antes));
-    });
-  } else {
-    marcadas.forEach(x => {
-      const antes = x.t.valor;
-      x.t.valor = +(antes + x.juros).toFixed(2);
-      const aplicado = +(x.t.valor - antes).toFixed(2);
-      // marca quanto do valor de hoje é juro embutido: a tela de correção
-      // precisa disso para saber qual era o principal de origem
-      x.t.jurosSomados = +((x.t.jurosSomados || 0) + aplicado).toFixed(2);
-      efeito(x.t.fonte, chaveJuros(x.t), x.custo ? -aplicado : aplicado);
-    });
-  }
-  // a taxa escolhida na tela fica valendo daqui para a frente
-  marcadas.forEach(x => {
-    x.t.jurosAte = ate;
-    if (apJuros.taxas[x.t.id] !== undefined) x.t.taxaMensal = apJuros.taxas[x.t.id];
+  // Uma parcela de juros POR CLIENTE, por fonte e por conta. Por cliente
+  // porque é assim que se cobra: o Sidney tem a parcela dele, a Lika a dela.
+  // Por fonte porque cada uma concilia sozinha, e por conta porque juro de
+  // título e retorno de antecipação não são a mesma receita.
+  const grupos = {};
+  linhas.filter(x => !x.custo).forEach(x => {
+    const k = x.t.cliente + '|' + x.t.fonte + '|' + chaveJuros(x.t);
+    (grupos[k] = grupos[k] || { cliente: x.t.cliente, fonte: x.t.fonte, chave: chaveJuros(x.t), linhas: [] }).linhas.push(x);
+  });
+  Object.values(grupos).forEach(g => {
+    const valorRec = +g.linhas.reduce((s, x) => s + x.efeito, 0).toFixed(2);
+    if (Math.abs(valorRec) < .005) return;
+    const conta = contaPorChave(g.chave);
+    efeito(g.fonte, g.chave, valorRec);
+    // o que entrou nesta rodada, guardado para o extrato conseguir abrir
+    const rodada = {
+      ate, valor: valorRec, lote: lote.id,
+      itens: g.linhas.map(x => ({
+        tituloId: x.t.id, tipo: x.t.tipo, num: x.t.numAntecipacao || null,
+        nf: x.t.nf || '', enviadaEm: x.t.dataEntrada, base: +(x.t.valor || 0).toFixed(2),
+        desde: x.desde, dias: x.dias, taxa: x.taxa, juros: +x.efeito.toFixed(2)
+      }))
+    };
+    // Parcela que já existe em aberto continua a mesma: ela cresce e o
+    // vencimento anda para a nova data de corte. Criar uma nova a cada mês
+    // encheria a lista de pedaços da mesma cobrança.
+    const aberta = tits().find(t => t.tipo === 'JUROS' && emAberto(t)
+      && t.cliente === g.cliente && t.fonte === g.fonte
+      && (t.contaId || null) === (conta ? conta.id : null));
+    if (aberta) {
+      lote.somou.push({
+        id: aberta.id, valor: aberta.valor, dataVenc: aberta.dataVenc,
+        obs: aberta.obs, rodadas: (aberta.composicao || []).length
+      });
+      aberta.valor = +(aberta.valor + valorRec).toFixed(2);
+      aberta.dataVenc = ate;
+      aberta.composicao = (aberta.composicao || []).concat([rodada]);
+      aberta.obs = `${conta ? conta.nome : 'Juros'} de ${esc(g.cliente)} — `
+        + `${aberta.composicao.length} reconhecimento(s), o último até ${fmtBR(ate)}`;
+    } else {
+      const novoId = uid();
+      lote.criou.push(novoId);
+      DB.titulos.push({
+        id: novoId, fonte: g.fonte, cliente: g.cliente, sacado: '', tipo: 'JUROS',
+        nf: '', emissao: 'NA', dataEntrada: ate, dataVenc: ate,
+        valorBruto: null, valorLiquido: null, valor: valorRec, status: 'A_VENCER',
+        dataReceb: null, valorRecebido: null,
+        // a categoria fica no próprio título, não só no lançamento
+        contaId: conta ? conta.id : null,
+        composicao: [rodada],
+        obs: `${conta ? conta.nome : 'Juros'} de ${esc(g.cliente)} — 1 reconhecimento, até ${fmtBR(ate)}`,
+        operacaoId: null, numAntecipacao: null, taxaMensal: null, jurosAte: null,
+        loteApropriacao: lote.id, deletedAt: null
+      });
+    }
+  });
+  // Captação nunca vira título a receber: dizer que há mais a receber por
+  // causa de um custo seria mentir. O juro devido engorda a própria dívida.
+  linhas.filter(x => x.custo).forEach(x => {
+    const antes = x.t.valor;
+    x.t.valor = +(antes + x.juros).toFixed(2);
+    efeito(x.t.fonte, chaveJuros(x.t), -(x.t.valor - antes));
   });
 
+  // O relógio só anda onde houve juro. Marcar jurosAte numa linha de taxa zero
+  // apagaria o período sem reconhecer nada, e ele nunca mais voltaria.
+  linhas.forEach(x => { if (Math.abs(x.efeito) > .005) x.t.jurosAte = ate; });
+
   Object.values(acum).forEach(({ fonte, chave, valor }) => {
+    if (Math.abs(valor) < .005) return;
     const conta = contaPorChave(chave);
     const movId = uid();
     lote.movs.push(movId);
     DB.movs.push({
       id: movId, seq: proximaSeq(), fonte, data: ate, tipo: 'JUROS',
-      descricao: `${conta ? conta.nome : 'Juros'}${cli ? ' — ' + cli : ''} até ${fmtBR(ate)}`,
-      cliente: cli || '', tituloId: null, operacaoId: null,
+      descricao: `${conta ? conta.nome : 'Juros'}${rotulo ? ' — ' + rotulo : ''} até ${fmtBR(ate)}`,
+      cliente: rotulo || '', tituloId: null, operacaoId: null,
       // não passa pelo caixa: o dinheiro ainda não voltou, só o direito cresceu
       entrada: null, saida: null, resultado: valor,
       contaId: conta ? conta.id : null, servico: null,
@@ -5469,9 +5321,9 @@ function salvarApropriar() {
       obs: 'Juros reconhecidos por competência', deletedAt: null
     });
   });
+  if (!Array.isArray(DB.apropriacoes)) DB.apropriacoes = [];
   DB.apropriacoes.push(lote);
-  save(); closeModal('ovApropriar'); render();
-  toast(`Juros de ${brl(bruto)} apropriados até ${fmtBR(ate)} em ${Object.keys(acum).length} lançamento(s)`);
+  return lote;
 }
 
 /* ---------- Desfazer apropriação ----------
@@ -5624,13 +5476,13 @@ function apHistorico() {
   const l = novas.concat(antigas).sort((a, b) => (b.quando || '').localeCompare(a.quando || ''));
   if (!l.length) return '';
   return `<div class="memo show" style="margin-top:10px">
-    <div class="l" style="font-weight:600"><span>Apropriações já feitas</span><span></span></div>
+    <div class="l" style="font-weight:600"><span>Reconhecimentos já feitos</span><span></span></div>
     ${l.slice(0, 8).map(x => `<div class="l"><span>${fmtBR(x.data)}
       <i class="muted" style="font-style:normal">· ${x.n} título(s)${x.cliente ? ' · ' + esc(x.cliente) : ''}${x.fonte ? ' · ' + esc(rotuloFonte(x.fonte)) : ''}</i>
       ${x.antiga ? '<span class="chip chip-warn">antiga</span>' : ''}</span>
       <span><b class="${x.total < 0 ? 'neg' : 'pos'}">${brl(x.total)}</b>
       <button class="btn btn-sm" style="margin-left:8px" onclick="${x.acao}">Desfazer</button></span></div>`).join('')}
-    ${l.length > 8 ? `<div class="conta">e mais ${l.length - 8} apropriação(ões) antes dessas.</div>` : ''}
+    ${l.length > 8 ? `<div class="conta">e mais ${l.length - 8} reconhecimento(s) antes desses.</div>` : ''}
     <div class="conta">As marcadas como <b>antigas</b> foram feitas antes de existir o registro de desfazer:
       são reconstruídas pelo razão, então a tela mostra o que vai mudar antes de confirmar.</div></div>`;
 }
@@ -5744,8 +5596,8 @@ VIEWS.captacoes = function () {
 
   const aviso = Math.abs(pend) > .5
     ? `<div class="alert"><b>${brl(pend)} de juros já devidos e ainda não reconhecidos.</b>
-       O custo do dinheiro captado corre todo dia, mas o resultado só enxerga quando é apropriado.
-       <button class="btn btn-sm right" onclick="abrirApropriar()">Apropriar juros</button></div>`
+       O custo do dinheiro captado corre todo dia, mas o resultado só enxerga quando o mês é reconhecido.
+       <button class="btn btn-sm right" onclick="abrirJurosMes()">Juros do mês</button></div>`
     : `<div class="alert">Recurso de terceiro no seu caixa: entra como dinheiro disponível, mas é
        <b>subtraído do patrimônio</b> na conciliação — porque não é seu. Os juros são o custo de captar.</div>`;
 
@@ -5765,7 +5617,7 @@ VIEWS.captacoes = function () {
 
   return stats + aviso +
     `<div class="filters">${segFonte()}
-      <button class="btn btn-sm right" onclick="abrirApropriar()">⧗ Apropriar juros</button></div>
+      <button class="btn btn-sm right" onclick="abrirJurosMes()">⧗ Juros do mês</button></div>
     <div class="panel"><div class="panel-head"><h2>Recurso de terceiros<small>o custo corre por dia, pela mesma fórmula das antecipações</small></h2></div>
       <div class="tbl-scroll"><table><thead><tr>
         ${geral ? '<th>Fonte</th>' : ''}<th>Investidor</th><th>Desde</th><th class="num">Valor</th>
@@ -6126,8 +5978,9 @@ VIEWS.clientes = function () {
   const aviso = Math.abs(pend) > .5
     ? `<div class="alert"><b>${brl(pend)} de juros já corridos e ainda sem parcela.</b>
        ${semParcela ? `${semParcela} cliente(s) ainda não têm parcela de juros aberta. ` : ''}
-       Apropriar transforma isso numa parcela por cliente, que vence na data do corte e vai sendo abatida quando ele mandar recurso.
-       <button class="btn btn-sm right" onclick="abrirApropriar()">Apropriar juros</button></div>`
+       O reconhecimento do fim do mês transforma isso numa parcela por cliente, que vence no último dia do mês
+       e vai sendo abatida quando ele mandar recurso.
+       <button class="btn btn-sm right" onclick="abrirJurosMes()">Juros do mês</button></div>`
     : '';
 
   const geral = fonteFiltro === 'GERAL';
@@ -6147,7 +6000,7 @@ VIEWS.clientes = function () {
 
   return stats + aviso +
     `<div class="filters">${segFonte()}
-      <button class="btn btn-sm right" onclick="abrirApropriar()">⧗ Apropriar juros</button></div>
+      <button class="btn btn-sm right" onclick="abrirJurosMes()">⧗ Juros do mês</button></div>
     <div class="panel"><div class="panel-head"><h2>Posição por cliente<small>o que cada um deve hoje: principal + juros apropriados</small></h2></div>
       <div class="tbl-scroll"><table><thead><tr>
         <th>Cliente</th><th class="num">Principal</th><th class="num">Juros apropriados</th>
@@ -6233,8 +6086,8 @@ function extratoHTML(p) {
 
   const semParcela = Math.abs(p.aApropriar) > .5 && !p.jurosTit.length
     ? `<div class="alert"><b>${brl(p.aApropriar)} de juros já corridos e ainda sem parcela.</b>
-       Apropriar cria a parcela de juros deste cliente, com vencimento na data do corte.
-       <button class="btn btn-sm right" onclick="closeModal('ovExtrato');abrirApropriar('${esc(p.nome).replace(/'/g, "\\'")}')">Apropriar</button></div>`
+       O reconhecimento do fim do mês cria a parcela de juros deste cliente, com vencimento no último dia do mês.
+       <button class="btn btn-sm right" onclick="closeModal('ovExtrato');abrirJurosMes()">Juros do mês</button></div>`
     : '';
 
   return cabec + semParcela + parcelas +
@@ -6483,20 +6336,20 @@ function crJuros(s) {
   return `<div class="panel" style="margin-bottom:14px"><div class="panel-head">
       <h2>Juros de ${esc(crCli)}<small>o que já é cobrável e o que ainda está correndo</small></h2>
       <div class="acoes">
-        <button class="btn btn-sm" onclick="abrirApropriar('${nome}')">⧗ Apropriar</button>
         <button class="btn btn-sm" onclick="abrirAcerto()">Acertar</button>
         <button class="btn btn-sm btn-gold" onclick="abrirRateio('${nome}')">＋ Receber</button>
       </div></div>
     <div style="padding:0 14px 14px"><div class="memo show" style="margin:0">
-      <div class="l"><span>Juros já apropriados, virados em parcela cobrável</span>
+      <div class="l"><span>Juros já reconhecidos, virados em parcela cobrável</span>
         <span class="pos">${brl(apropriado)}</span></div>
       <div class="l"><span>Juros corridos até ${fmtBR(ate)} e ainda não reconhecidos</span>
         <span class="${Math.abs(corridos) > .5 ? 'warntxt' : 'muted'}">${brl(corridos)}</span></div>
       <div class="l tot"><span>Juros devidos hoje</span><span>${brl(apropriado + corridos)}</span></div>
-      <div class="conta">${acertado ? `Os juros estão acertados até <b>${fmtBR(acertado)}</b>: daí em diante o saldo volta a render.`
-      : 'Nenhuma apropriação feita ainda para este cliente: o juro corre desde o primeiro envio.'}
-        Apropriar transforma o que já correu numa parcela que vence na data do corte;
-        receber abate primeiro essa parcela, depois o juro do período e só então o principal.</div>
+      <div class="conta">${acertado ? `Os juros estão reconhecidos até <b>${fmtBR(acertado)}</b>: daí em diante o saldo volta a render.`
+      : 'Nada reconhecido ainda para este cliente: o juro corre desde o primeiro envio.'}
+        O que correu vira parcela cobrável no fechamento do mês, em <b>Fechamento</b>, e não aqui:
+        assim o juro de setembro fica no resultado de setembro. Receber abate primeiro essa parcela,
+        depois o juro do período e só então o principal.</div>
     </div></div></div>`;
 }
 
@@ -6878,11 +6731,11 @@ function rtAplicar(m, juros) {
 /* =========================================================================
    Recebimento do cliente, rateado entre as antecipações
 
-   Entrou 50 mil da LIKA. Ela tem onze antecipações na rua, cada uma com o seu
-   juro corrido. Abrir uma por uma e calcular quanto cabe em cada é trabalho
-   que a máquina faz melhor: a ordem de quitação é sempre a mesma, e é a que
-   ele usa na cobrança — primeiro os juros, depois o principal, do mais antigo
-   para o mais novo.
+   Entraram 50 mil de um cliente que tem onze antecipações na rua, cada uma
+   com o seu juro corrido. Abrir uma por uma e calcular quanto cabe em cada é
+   trabalho que a máquina faz melhor: a ordem de quitação é sempre a mesma, e
+   é a que ele usa na cobrança: primeiro os juros, depois o principal, do mais
+   antigo para o mais novo.
 
    Três camadas, nesta ordem:
      1. parcela de juros já apropriada (juro que virou título e já é receita)
@@ -7345,8 +7198,8 @@ function pendencias() {
     .reduce((s, t) => { const x = jurosAApropriar(t, hj); return s + (x.dias > 0 ? x.efeito : 0); }, 0);
   if (Math.abs(jurosPend) > 50) p.push({
     nivel: 'medio', rot: 'Juros corridos e ainda não reconhecidos', valor: brl(jurosPend),
-    txt: 'O resultado do período está menor do que a realidade até isso ser apropriado.',
-    acao: "abrirApropriar()", botao: 'Apropriar juros'
+    txt: 'O resultado do período está menor do que a realidade até o mês ser reconhecido no fechamento.',
+    acao: "abrirJurosMes()", botao: 'Juros do mês'
   });
 
   const inflados = typeof retornosInflados === 'function' ? retornosInflados(fs) : [];
@@ -7923,6 +7776,211 @@ function confAssociarTodos() {
 }
 
 /* =========================================================================
+   Juros do mês
+   ---------------------------------------------------------------------------
+   Reconhecer juros deixou de ser uma operação avulsa, feita quando alguém
+   lembrava, e virou parte do fechamento. No fim de cada mês o sistema mostra
+   o que correu de juro em cada cliente, você confere e reconhece: saem
+   lançamentos sem efeito no caixa, que levam o resultado do mês para o número
+   certo. Só depois o mês fecha.
+
+   O motivo de ser mensal e não avulso é a competência. Juro que correu em
+   setembro é resultado de setembro, mesmo que o dinheiro só volte em
+   dezembro. Apropriar em datas soltas espalhava o mesmo juro por meses
+   errados e ninguém conseguia dizer, depois, de onde tinha vindo o número.
+
+   O corte é sempre o último dia do mês, e cada título guarda até quando já
+   teve juro reconhecido: rodar outubro não conta setembro de novo.
+
+   Duas naturezas na mesma tela, porque o resultado do mês precisa das duas:
+   o que os clientes devem por antecipação é receita, e vira parcela cobrável;
+   o que a empresa deve pelo recurso de terceiro é despesa, e engorda a
+   própria dívida. Capital de terceiro nunca vira título a receber.
+   ========================================================================= */
+
+let jmMes = null;
+
+const jmAte = mk => ultimoDia(mk);
+
+/* O que rende no mês: antecipação e captação ainda abertas. A taxa vem do
+   cadastro do cliente, e zero é taxa válida: cliente sem juro combinado
+   aparece na lista com o que deve, mas sem nada a reconhecer. */
+function jmLinhas(mk, fs) {
+  const ate = jmAte(mk);
+  const fontes = fs || fontesGeral();
+  return tits().filter(t => emAberto(t) && naRua(t) && fontes.includes(t.fonte))
+    .map(t => ({ t, ...jurosAApropriar(t, ate) }))
+    .filter(x => x.dias > 0)
+    .sort((a, b) => (a.t.cliente || '').localeCompare(b.t.cliente || '', 'pt-BR'));
+}
+
+/* Uma linha por cliente, que é a unidade de cobrança. As antecipações
+   continuam registradas uma a uma; o que se reconhece é o juro do cliente. */
+function jmGrupos(mk, fs) {
+  const linhas = jmLinhas(mk, fs);
+  const mapa = {};
+  linhas.forEach(x => {
+    const k = (x.custo ? 'C|' : 'R|') + (x.t.cliente || 'sem cliente');
+    const g = mapa[k] = mapa[k] || {
+      cliente: x.t.cliente || 'sem cliente', custo: x.custo,
+      linhas: [], base: 0, juros: 0, taxas: [], desde: null, dias: 0
+    };
+    g.linhas.push(x);
+    g.base = +(g.base + (x.t.valor || 0)).toFixed(2);
+    g.juros = +(g.juros + x.efeito).toFixed(2);
+    if (g.taxas.indexOf(x.taxa) < 0) g.taxas.push(x.taxa);
+    if (!g.desde || x.desde < g.desde) g.desde = x.desde;
+    g.dias = Math.max(g.dias, x.dias);
+  });
+  const todos = Object.values(mapa).sort((a, b) => a.cliente.localeCompare(b.cliente, 'pt-BR'));
+  const receber = todos.filter(g => !g.custo);
+  const pagar = todos.filter(g => g.custo);
+  return {
+    mk, ate: jmAte(mk), linhas, receber, pagar,
+    totalReceber: +receber.reduce((s, g) => s + g.juros, 0).toFixed(2),
+    totalPagar: +pagar.reduce((s, g) => s + g.juros, 0).toFixed(2),
+    total: +todos.reduce((s, g) => s + g.juros, 0).toFixed(2),
+    semTaxa: receber.filter(g => Math.abs(g.juros) < .005)
+  };
+}
+
+/* O que já foi reconhecido naquele mês. O lote é o registro do antes, então é
+   ele que diz se o mês já rodou e é por ele que se desfaz. */
+const jmLote = mk => (DB.apropriacoes || []).find(l => mesDe(l.ate) === mk);
+/* Reconhecimentos antigos, feitos na data que fosse, também contam: o mês não
+   está pendente só porque o corte não caiu no último dia. */
+const jmTemLancamento = mk => movs().some(m => ehMovApropriacao(m) && mesDe(m.data) === mk);
+const jmFeito = mk => !!jmLote(mk) || jmTemLancamento(mk);
+
+/* Os meses encerrados que ainda não rodaram, do mais antigo para o mais novo.
+   A ordem importa e não é preferência: cada título guarda até quando já teve
+   juro reconhecido, e esse relógio só anda para a frente. Reconhecer setembro
+   antes de agosto levaria o relógio para 30/09 e jogaria os dois meses no
+   resultado de setembro, sem jeito de separar depois.
+
+   Mês fechado sai da fila mesmo sem ter rodado. Fechar é decidir que aquele
+   mês está encerrado como está, e o app avisa disso na hora de travar: deixar
+   um mês fechado bloqueando a fila travaria o reconhecimento para sempre.
+
+   Mês sem juros nenhum também sai: não há o que reconhecer num mês anterior à
+   primeira antecipação, e mantê-lo na fila deixaria um pendente eterno na
+   frente de todos os outros. */
+/* Todos os meses desde o primeiro lançamento até hoje, sem buraco. Não dá
+   para usar só os meses com movimento: juro corre em mês parado também, e um
+   mês sem nenhum lançamento sumiria da fila levando junto o período dele. */
+function jmMeses() {
+  const ms = mesesComMov();
+  if (!ms.length) return [];
+  const fim = mesDe(hoje());
+  const out = [];
+  let mk = ms[ms.length - 1];
+  while (mk <= fim && out.length < 600) { out.push(mk); mk = mesDe(addDias(ultimoDia(mk), 1)); }
+  return out;
+}
+const jmPendentes = () => jmMeses()
+  .filter(mk => ultimoDia(mk) <= hoje() && !mesFechado(mk) && !jmFeito(mk)
+    && Math.abs(jmGrupos(mk).total) > .005);
+const jmAtrasoAntes = mk => jmPendentes().filter(x => x < mk);
+
+/* ---------- Tela ---------- */
+function abrirJurosMes(mk) {
+  jmMes = mk || jmPendentes()[0] || mesDe(hoje());
+  limpaErro('jm_erro');
+  jmPrevia();
+  openModal('ovJurosMes');
+}
+
+function jmPrevia() {
+  const mk = jmMes; if (!mk) return;
+  const g = jmGrupos(mk);
+  const feito = jmLote(mk);
+  const futuro = g.ate > hoje();
+  const atraso = jmAtrasoAntes(mk);
+  el('jmTit').textContent = 'Juros de ' + mesLabel(mk);
+
+  el('jm_aviso').innerHTML = feito
+    ? `<b>${esc(mesLabel(mk))} já teve os juros reconhecidos</b> em ${fmtBR(feito.ate)}:
+       ${brl(feito.total)} em ${feito.n} título(s). Para refazer, desfaça primeiro no histórico abaixo.`
+    : futuro
+      ? `<b>${esc(mesLabel(mk))} ainda não terminou.</b> O corte é ${fmtBR(g.ate)} e hoje é ${fmtBR(hoje())}:
+         reconhecer agora contaria juro de dias que ainda não correram.`
+      : atraso.length
+        ? `<b>Falta reconhecer ${esc(mesLabel(atraso[0]))} antes.</b>
+           Os meses correm em ordem: cada título guarda até quando já teve juro reconhecido, e esse relógio
+           só anda para a frente. Rodar ${esc(mesLabel(mk))} agora jogaria ${atraso.length > 1
+          ? `os ${atraso.length} meses atrasados` : esc(mesLabel(atraso[0]))} dentro deste resultado.
+           <button class="btn btn-sm right btn-gold" onclick="abrirJurosMes('${atraso[0]}')">Ir para ${esc(mesLabel(atraso[0]))}</button>`
+        : `Reconhece o juro que correu até <b>${fmtBR(g.ate)}</b>, sem esperar o dinheiro voltar.
+         O caixa não se move: o que cresce é o direito, e o resultado de ${esc(mesLabel(mk))} acompanha.
+         Cada título guarda até quando já foi reconhecido, então rodar o mês seguinte não conta este de novo.`;
+
+  const tabela = (titulo, lista, nota) => !lista.length ? '' : `
+    <div class="panel" style="margin-bottom:12px"><div class="panel-head"><h2>${titulo}<small>${nota}</small></h2></div>
+    <div class="tbl-scroll" style="max-height:30vh"><table><thead><tr>
+      <th>Cliente</th><th class="num">Antecip.</th><th class="num">Em aberto</th>
+      <th class="num">Taxa % mês</th><th class="num">Dias</th><th class="num">Juros do mês</th></tr></thead>
+    <tbody>${lista.map(x => `<tr class="${Math.abs(x.juros) < .005 ? 'apoff' : ''}">
+      <td>${cliTag(x.cliente)}</td>
+      <td class="num muted">${x.linhas.length}</td>
+      <td class="num">${brl(x.base)}</td>
+      <td class="num">${x.taxas.length > 1 ? '<i class="muted" style="font-style:normal">várias</i>'
+      : x.taxas[0] > 0 ? fmtTaxa(x.taxas[0]) : '<span class="chip chip-n">sem juros</span>'}</td>
+      <td class="num muted">${x.dias}</td>
+      <td class="num ${Math.abs(x.juros) < .005 ? 'zero' : x.juros < 0 ? 'neg' : 'pos'}">${
+      Math.abs(x.juros) < .005 ? '—' : brl(x.juros)}</td></tr>`).join('')}
+    </tbody></table></div></div>`;
+
+  el('jm_previa').innerHTML = (!g.receber.length && !g.pagar.length)
+    ? `<div class="empty">Nada a reconhecer em ${esc(mesLabel(mk))}.
+        Ou não há antecipação aberta, ou o juro do período já foi reconhecido.</div>`
+    : tabela('Juros a receber dos clientes', g.receber, 'vira parcela cobrável, uma por cliente')
+    + tabela('Juros a pagar pelo recurso de terceiro', g.pagar,
+      'é custo do dinheiro: engorda a dívida, não vira título a receber');
+
+  const sem = g.semTaxa.length;
+  el('jm_efeito').innerHTML = `
+    <div class="l"><span>Receita de juros dos clientes</span><span class="${g.totalReceber > 0 ? 'pos' : 'muted'}">${brl(g.totalReceber)}</span></div>
+    <div class="l"><span>Custo do recurso de terceiro</span><span class="${g.totalPagar < 0 ? 'neg' : 'muted'}">${brl(g.totalPagar)}</span></div>
+    <div class="l tot"><span>Resultado de ${esc(mesLabel(mk))}</span><span class="${g.total < 0 ? 'neg' : 'pos'}">${brl(g.total)}</span></div>
+    <div class="l"><span>Caixa</span><span class="muted">não se move</span></div>
+    <div class="l"><span>Conciliação</span><span class="pos">continua fechando</span></div>
+    <div class="conta">A receita vira uma parcela de juros por cliente, com vencimento em ${fmtBR(g.ate)}.
+      Como ela vence antes das antecipações, é a primeira a ser abatida quando o cliente mandar recurso.
+      ${sem ? `<br><b>${sem} cliente(s) estão com taxa zero</b> e não geram juro nenhum.
+        A taxa é do cadastro do cliente: para passar a cobrar, altere lá.` : ''}</div>`;
+  el('jm_efeito').classList.add('show');
+  el('jm_hist').innerHTML = apHistorico();
+
+  const b = el('jm_ok');
+  const podeRodar = !feito && !futuro && !atraso.length && Math.abs(g.total) > .005;
+  b.style.display = podeRodar ? '' : 'none';
+  b.textContent = `Reconhecer ${brl(g.total)} em ${mesLabel(mk)}`;
+}
+
+function salvarJurosMes() {
+  limpaErro('jm_erro');
+  const mk = jmMes; if (!mk) return;
+  const ate = jmAte(mk);
+  if (jmLote(mk)) return erro('jm_erro', `${mesLabel(mk)} já teve os juros reconhecidos. Desfaça antes de refazer.`);
+  if (ate > hoje()) return erro('jm_erro', `${mesLabel(mk)} ainda não terminou.`);
+  const atraso = jmAtrasoAntes(mk);
+  if (atraso.length)
+    return erro('jm_erro', `${mesLabel(atraso[0])} precisa ser reconhecido antes: o relógio de juros de cada `
+      + `título só anda para a frente, e rodar fora de ordem juntaria os dois meses neste resultado.`);
+  if (mesFechado(mk))
+    return erro('jm_erro', `${mesLabel(mk)} está fechado. Reabra em Fechamento para reconhecer os juros.`);
+  const g = jmGrupos(mk);
+  // Linha de taxa zero não entra: sem juro a reconhecer, marcar o relógio dela
+  // apagaria o período em silêncio.
+  const linhas = g.linhas.filter(x => Math.abs(x.efeito) > .005);
+  if (!linhas.length) return erro('jm_erro', `Não há juros a reconhecer em ${mesLabel(mk)}.`);
+
+  const lote = aplicarJuros(linhas, ate, '');
+  save(); closeModal('ovJurosMes'); render();
+  toast(`Juros de ${mesLabel(mk)} reconhecidos: ${brl(lote.total)} em ${lote.movs.length} lançamento(s)`);
+}
+
+/* =========================================================================
    Backup e gravação do arquivo
    ========================================================================= */
 function exportData() {
@@ -7991,11 +8049,11 @@ if (!MODO_NUVEM) { load(); render(); }
 /* Abre formulário ou grava: exige perfil Financeiro ou Administrador. */
 const ACOES_ESCRITA = [
   'abrirLanc', 'abrirOper', 'abrirAnt', 'abrirTitulo', 'abrirReceb', 'abrirProrrog',
-  'abrirPerda', 'abrirAporte', 'abrirApropriar', 'abrirAcerto', 'abrirRateio',
+  'abrirPerda', 'abrirAporte', 'abrirJurosMes', 'abrirAcerto', 'abrirRateio',
   'abrirTransf', 'abrirReclass', 'abrirCliente', 'abrirSacado', 'abrirConta',
   'abrirRetornos', 'abrirImport',
   'salvarLanc', 'salvarOper', 'salvarAnt', 'salvarTitulo', 'salvarReceb', 'salvarProrrog',
-  'salvarPerda', 'salvarAporte', 'salvarApropriar', 'salvarAcerto', 'salvarRateio',
+  'salvarPerda', 'salvarAporte', 'salvarJurosMes', 'salvarAcerto', 'salvarRateio',
   'salvarTransf', 'salvarReclass', 'salvarCliente', 'salvarSacado', 'salvarConta',
   'salvarTaxas', 'setFonteVal',
   'excluirLanc', 'excluirOper', 'excluirAnt', 'excluirTitulo', 'excluirCliente',
@@ -8003,7 +8061,7 @@ const ACOES_ESCRITA = [
   'desfazerApropriacao', 'desfazerApropriacaoAntiga', 'desfazerRateio',
   'rtCorrigir', 'rtCorrigirTodos', 'confAssociar', 'confAssociarTodos', 'alternarFechamento',
   'cpPagar', 'cpDesfazer', 'salvarParcPgto',
-  'restaurar', 'importData', 'apMarcar', 'apTaxaTodos'
+  'restaurar', 'importData'
 ];
 
 /* Só o administrador: mexe em quem acessa, no que foi excluído e no backup. */
