@@ -1800,9 +1800,17 @@ const retornosInflados = fs => movs()
    O sinal vem do próprio valor: título positivo é dinheiro na rua e os juros
    são receita; título negativo é recurso de terceiro na mão da empresa, e os
    juros são despesa. A fórmula é a mesma. */
-/* Rende por dia quem teve o dinheiro na rua: antecipação e captação. Título
-   de cliente não rende, porque o ganho dele é o deságio, cobrado na operação. */
-const naRua = t => t.tipo === 'ANTECIPACAO' || ehCaptacao(t);
+/* Rende por dia quem está com dinheiro que não é dele: antecipação e captação
+   pelo principal, e a parcela de juros já reconhecida pelo que ela vale.
+
+   A parcela render é o que faz o sistema bater com a planilha de correção:
+   juro não pago é saldo devedor como qualquer outro, e no mês seguinte ele
+   está na base. Deixar a parcela parada seria cobrar juro simples sobre o
+   período vencido, que não é o que foi combinado com o cliente.
+
+   Título de cliente continua fora: o ganho dele é o deságio, cobrado de uma
+   vez na operação, e cobrar juro por dia em cima seria cobrar duas vezes. */
+const naRua = t => t.tipo === 'ANTECIPACAO' || t.tipo === 'JUROS' || ehCaptacao(t);
 const jurosDesde = t => t.jurosAte || t.dataEntrada;
 function jurosAApropriar(t, ate, taxaEscolhida) {
   const desde = jurosDesde(t);
@@ -6184,56 +6192,116 @@ function crAbrirMov(movId) {
   }, 80);
 }
 
-/* A série dia a dia, no modelo da planilha. O crédito abate juros primeiro
-   e só depois o principal, que é a ordem que ele usa na cobrança. */
+/* A série dia a dia, no modelo da planilha.
+
+   Por dentro há um relógio por título, porque a taxa é do título: o mesmo
+   cliente pode ter uma antecipação a 4% e outra a 5%, e corrigir as duas pela
+   mesma taxa erra o valor da dívida. A grade continua consolidada, que é o
+   que ele lê.
+
+   O saldo de cada título rende sobre principal MAIS juros: juro não pago
+   entra na base do dia seguinte. É o que a planilha dele faz, e é o que o
+   sistema passa a fazer em todo lugar.
+
+   O crédito abate a dívida do cliente inteiro, não a do título que ele veio
+   quitar: juros primeiro, do mais antigo para o mais novo, e só depois o
+   principal, na mesma ordem. É a ordem que ele usa na cobrança, e é a mesma
+   que a tela de recebimento aplica. */
+function crAbate(contas, ordem, credito) {
+  let resta = credito, aj = 0, ap = 0;
+  const passa = campo => {
+    for (const id of ordem) {
+      if (resta <= 1e-9) return;
+      const c = contas.get(id);
+      if (!c || c[campo] <= 1e-9) continue;
+      const v = Math.min(resta, c[campo]);
+      c[campo] -= v; resta -= v;
+      if (campo === 'juros') aj += v; else ap += v;
+    }
+  };
+  passa('juros');
+  passa('principal');
+  // Quem paga mais do que deve não fica com a dívida negativa: a dívida acaba,
+  // e o que entrou além disso é juro cobrado a mais, não crédito a favor dele.
+  return { abateJuros: aj, abatePrincipal: ap, excedente: resta };
+}
+
 function crSerie(cliente, ate, fs) {
   const ev = crEventos(cliente, fs);
-  if (!ev.length) return { linhas: [], ev, principal: 0, juros: 0, saldo: 0 };
-  const taxa = crTaxa(cliente, fs);
+  const vazio = { linhas: [], ev, principal: 0, juros: 0, saldo: 0, taxas: [],
+    enviado: 0, recebido: 0, pagoJuros: 0, pagoPrincipal: 0, corrigido: 0,
+    excedente: 0, mensal: 0 };
+  if (!ev.length) return vazio;
   const inicio = ev[0].data, fim = ate || hoje();
   const porDia = {};
   ev.forEach(e => (porDia[e.data] = porDia[e.data] || []).push(e));
 
+  // Uma conta por título que colocou dinheiro na rua. A parcela de juros NÃO
+  // entra aqui: ela não é dívida nova, é o mesmo juro que já está correndo
+  // nestas contas, só que separado para cobrar. Contá-la de novo dobraria.
+  const contas = new Map();
+  const ordem = [];
+  const conta = t => {
+    if (!contas.has(t.id)) {
+      contas.set(t.id, { principal: 0, juros: 0, taxa: taxaDa(t), t });
+      ordem.push(t.id);
+      ordem.sort((a, b) => (contas.get(a).t.dataEntrada || '')
+        .localeCompare(contas.get(b).t.dataEntrada || ''));
+    }
+    return contas.get(t.id);
+  };
+
   const linhas = [];
-  let principal = 0, juros = 0;
   let pagoJuros = 0, pagoPrincipal = 0, corrigidoTotal = 0, excedenteTotal = 0;
   let d = inicio;
   while (d <= fim) {
     const doDia = porDia[d] || [];
     // o saldo de ontem rende hoje; no primeiro dia ainda não há o que render
-    const correcao = (d === inicio || principal + juros <= 0) ? 0
-      : +((principal + juros) * fatorJuros(taxa, 1)).toFixed(6);
-    juros += correcao; corrigidoTotal += correcao;
+    let correcao = 0;
+    if (d !== inicio) contas.forEach(c => {
+      const base = c.principal + c.juros;
+      if (base <= 0) return;
+      const j = base * fatorJuros(c.taxa, 1);
+      c.juros += j; correcao += j;
+    });
+    corrigidoTotal += correcao;
 
-    const debito = doDia.reduce((s, e) => s + e.debito, 0);
-    const credito = doDia.reduce((s, e) => s + e.credito, 0);
-    principal += debito;
-    // O crédito abate juros primeiro e principal depois, e para no zero. Quem
-    // paga mais do que deve não fica com a dívida negativa: a dívida acaba, e
-    // o que entrou além disso é juro cobrado a mais — não crédito a favor
-    // dele. Saldo negativo aqui só confundiria a cobrança do mês seguinte.
-    const abateJuros = Math.min(credito, Math.max(juros, 0));
-    juros -= abateJuros;
-    let resto = +(credito - abateJuros).toFixed(6);
-    const abatePrincipal = Math.min(resto, Math.max(principal, 0));
-    principal -= abatePrincipal;
-    const excedente = +(resto - abatePrincipal).toFixed(6);
-    excedenteTotal += excedente;
-    pagoJuros += abateJuros; pagoPrincipal += abatePrincipal;
+    let debito = 0, credito = 0;
+    doDia.forEach(e => { if (e.debito) { conta(e.t).principal += e.debito; debito += e.debito; } });
+    doDia.forEach(e => { credito += e.credito; });
+    const ab = credito > 0 ? crAbate(contas, ordem, credito)
+      : { abateJuros: 0, abatePrincipal: 0, excedente: 0 };
+    pagoJuros += ab.abateJuros; pagoPrincipal += ab.abatePrincipal;
+    excedenteTotal += ab.excedente;
+
+    let principal = 0, juros = 0;
+    contas.forEach(c => { principal += c.principal; juros += c.juros; });
 
     if (doDia.length || correcao > 0)
       linhas.push({
-        data: d, correcao, debito, credito, abateJuros, abatePrincipal, excedente,
+        data: d, correcao, debito, credito,
+        abateJuros: ab.abateJuros, abatePrincipal: ab.abatePrincipal, excedente: ab.excedente,
         principal: +principal.toFixed(2), juros: +juros.toFixed(2),
         saldo: +(principal + juros).toFixed(2),
         eventos: doDia.filter(e => e.debito || e.credito || e.apropriado)
       });
     d = addDias(d, 1);
   }
+
+  let principal = 0, juros = 0, mensal = 0;
+  const taxas = [];
+  contas.forEach(c => {
+    principal += c.principal; juros += c.juros;
+    mensal += (c.principal + c.juros) * fatorJuros(c.taxa, 30);
+    if (taxas.indexOf(c.taxa) < 0) taxas.push(c.taxa);
+  });
+  taxas.sort((a, b) => a - b);
+
   return {
-    linhas, ev, taxa, inicio, fim,
+    linhas, ev, taxa: crTaxa(cliente, fs), taxas, inicio, fim,
     principal: +principal.toFixed(2), juros: +juros.toFixed(2),
     saldo: +(principal + juros).toFixed(2),
+    mensal: +mensal.toFixed(2),
     enviado: +ev.reduce((s, e) => s + e.debito, 0).toFixed(2),
     recebido: +ev.reduce((s, e) => s + e.credito, 0).toFixed(2),
     pagoJuros: +pagoJuros.toFixed(2), pagoPrincipal: +pagoPrincipal.toFixed(2),
@@ -6241,12 +6309,16 @@ function crSerie(cliente, ate, fs) {
   };
 }
 
-/* A taxa do cliente: a dos títulos dele, quando todos usam a mesma. */
+/* A taxa que a tela mostra no cabeçalho. Quando o cliente tem mais de uma, o
+   número único mentiria: aí quem manda é a lista, e o cabeçalho diz as duas. */
 function crTaxa(cliente, fs) {
   const ts = crAntecipacoes(fs).filter(t => t.cliente === cliente);
   const taxas = [...new Set(ts.map(taxaDa))];
   return taxas.length ? taxas[0] : taxaPadrao();
 }
+const crRotuloTaxa = s => !s.taxas || s.taxas.length <= 1
+  ? `${fmtTaxa(s.taxas && s.taxas.length ? s.taxas[0] : s.taxa)}%`
+  : s.taxas.map(fmtTaxa).join('% e ') + '%';
 
 /* ---------- Tela ---------- */
 function crMuda(campo, v) {
@@ -6289,7 +6361,7 @@ VIEWS.correcao = function () {
 
   const stats = `<div class="stats">
     <div class="stat"><div class="k">Saldo devedor</div><div class="v">${brl(s.saldo)}</div>
-      <div class="sub">corrigido até ${fmtBR(ate)}, ${fmtTaxa(s.taxa)}% ao mês</div></div>
+      <div class="sub">corrigido até ${fmtBR(ate)}, ${crRotuloTaxa(s)} ao mês</div></div>
     <div class="stat"><div class="k">Principal em aberto</div><div class="v">${brl(s.principal)}</div>
       <div class="sub">de ${brl(s.enviado)} enviados</div></div>
     <div class="stat"><div class="k">Juros em aberto</div><div class="v pos">${brl(s.juros)}</div>
@@ -6323,14 +6395,22 @@ function crJuros(s) {
   const fs = fontesDoFiltro();
   const abertas = crAntecipacoes(fs).filter(t => t.cliente === crCli && emAberto(t));
   const ate = crAte || hoje();
-  const corridos = +abertas.reduce((a, t) => {
-    const x = jurosAApropriar(t, ate); return a + (x.dias > 0 ? x.efeito : 0);
-  }, 0).toFixed(2);
   const parcelas = tits().filter(t => t.cliente === crCli && fs.includes(t.fonte)
     && t.tipo === 'JUROS' && emAberto(t));
   const apropriado = +parcelas.reduce((a, t) => a + (t.valor || 0), 0).toFixed(2);
+  // A parcela em aberto também está correndo: juro não pago é saldo devedor.
+  // Somar só o das antecipações daria um número menor do que o que se cobra.
+  const corridos = +abertas.concat(parcelas).reduce((a, t) => {
+    const x = jurosAApropriar(t, ate); return a + (x.dias > 0 ? x.efeito : 0);
+  }, 0).toFixed(2);
   const acertado = abertas.map(t => t.jurosAte).filter(Boolean).sort().slice(-1)[0];
   if (!abertas.length && !parcelas.length) return '';
+
+  // A série refaz a conta desde o primeiro envio; os títulos guardam o que foi
+  // de fato reconhecido e cobrado. Quando os dois discordam, alguma taxa mudou
+  // depois do fato, e o número que vale é o que está lançado no razão.
+  const devidoTitulos = +(s.principal + apropriado + corridos).toFixed(2);
+  const desvio = +(s.saldo - devidoTitulos).toFixed(2);
 
   const nome = esc(crCli).replace(/'/g, "\'");
   return `<div class="panel" style="margin-bottom:14px"><div class="panel-head">
@@ -6345,11 +6425,19 @@ function crJuros(s) {
       <div class="l"><span>Juros corridos até ${fmtBR(ate)} e ainda não reconhecidos</span>
         <span class="${Math.abs(corridos) > .5 ? 'warntxt' : 'muted'}">${brl(corridos)}</span></div>
       <div class="l tot"><span>Juros devidos hoje</span><span>${brl(apropriado + corridos)}</span></div>
+      <div class="l"><span>Principal em aberto</span><span>${brl(s.principal)}</span></div>
+      <div class="l tot"><span>Total a receber deste cliente</span><span><b>${brl(devidoTitulos)}</b></span></div>
+      ${Math.abs(desvio) > .05 ? `<div class="l"><span class="warntxt">A série refeita dá ${brl(s.saldo)}</span>
+        <span class="warntxt">${brl(desvio)} de diferença</span></div>` : ''}
       <div class="conta">${acertado ? `Os juros estão reconhecidos até <b>${fmtBR(acertado)}</b>: daí em diante o saldo volta a render.`
       : 'Nada reconhecido ainda para este cliente: o juro corre desde o primeiro envio.'}
         O que correu vira parcela cobrável no fechamento do mês, em <b>Fechamento</b>, e não aqui:
         assim o juro de setembro fica no resultado de setembro. Receber abate primeiro essa parcela,
-        depois o juro do período e só então o principal.</div>
+        depois o juro do período e só então o principal.
+        ${Math.abs(desvio) > .05 ? `<br><b>Atenção:</b> refazendo a conta desde o primeiro envio, pelas taxas
+          de hoje, a dívida daria ${brl(s.saldo)}. A diferença de ${brl(desvio)} quer dizer que alguma taxa
+          mudou depois de o juro já ter sido reconhecido. O que vale para cobrar é o total acima, que é o
+          que está lançado no razão.` : ''}</div>
     </div></div></div>`;
 }
 
@@ -6360,7 +6448,9 @@ function crAmortizacao(s) {
   const pago = s.pagoJuros + s.pagoPrincipal;
   const pj = pago > 0 ? s.pagoJuros / pago * 100 : 0;
   const so = s.pagoPrincipal < .005 && s.recebido > .005;
-  const mensal = +(s.saldo * (fatorJuros(s.taxa, 30))).toFixed(2);
+  // cada título pela taxa dele: com 4% e 5% na mesma carteira, um número
+  // único erraria a projeção do mês
+  const mensal = s.mensal;
   return `<div class="panel" style="margin-bottom:14px"><div class="panel-head">
       <h2>Amortização<small>de tudo que o cliente pagou, quanto foi juro e quanto abateu a dívida</small></h2></div>
     <div style="padding:0 14px 14px">
@@ -6402,7 +6492,7 @@ function crTabelaMes(s) {
   const cel = (v, cls) => v > .005 ? `<td class="num ${cls || ''}">${brl(v)}</td>` : `<td class="num zero">—</td>`;
   return `<div class="panel"><div class="panel-head">
       <h2>Correção mês a mês<small>o fechamento de cada mês</small></h2>
-      <div class="crtaxa">taxa <b>${fmtTaxa(s.taxa)}%</b> ao mês</div></div>
+      <div class="crtaxa">taxa <b>${crRotuloTaxa(s)}</b> ao mês</div></div>
     <div class="tbl-scroll crplan"><table><thead><tr>
       <th>MÊS</th><th class="num">CORREÇÃO</th><th class="num">C</th><th class="num">D</th>
       ${q ? '<th class="num">PRINCIPAL</th><th class="num">JUROS</th>' : ''}
@@ -6465,7 +6555,7 @@ function crTabelaDia(s) {
 
   return `<div class="panel"><div class="panel-head">
       <h2>Correção<small>uma linha por dia, o saldo de ontem rendendo hoje</small></h2>
-      <div class="crtaxa">taxa <b>${fmtTaxa(s.taxa)}%</b> ao mês · ÷ 30 por dia</div></div>
+      <div class="crtaxa">taxa <b>${crRotuloTaxa(s)}</b> ao mês · ÷ 30 por dia</div></div>
     <div class="tbl-scroll crplan" style="max-height:66vh"><table><thead>${cab}</thead>
       <tbody>${corpo}</tbody>
       <tfoot><tr>
@@ -6477,7 +6567,8 @@ function crTabelaDia(s) {
         <td class="num"><b>${brl(s.saldo)}</b></td></tr></tfoot></table></div>
     <div class="agpe">${linhas.length > corte ? `Mostrando os últimos ${corte} de ${linhas.length} dias. ` : `${linhas.length} dia(s) desde ${fmtBR(s.inicio)}. `}
       <b>C</b> é o que o cliente pagou e <b>D</b> o que foi enviado, como na planilha.
-      A correção de cada dia é o saldo do dia anterior × ${fmtTaxa(s.taxa)}% ÷ 30.</div></div>`;
+      A correção de cada dia é o saldo do dia anterior × ${crRotuloTaxa(s)} ÷ 30,
+      título a título: cada antecipação corrige pela taxa dela e a grade mostra a soma.</div></div>`;
 }
 
 /* ---------- Acerto de juros ----------
@@ -6777,7 +6868,10 @@ function planoRateio(cliente, valor, data, fs) {
   });
 
   // 2) juros corridos e ainda não reconhecidos, do mais antigo para o mais novo
-  const corridos = abertas.map(t => ({ t, ...jurosAApropriar(t, ate) }))
+  // A parcela de juros em aberto também rendeu desde que foi reconhecida:
+  // juro não pago é saldo devedor, e deixá-la de fora cobraria menos do que
+  // a correção mostra.
+  const corridos = abertas.concat(parcelas).map(t => ({ t, ...jurosAApropriar(t, ate) }))
     .filter(x => x.dias > 0 && x.efeito > .005);
   corridos.forEach(x => {
     if (resta <= .005) return;
@@ -6850,7 +6944,10 @@ function planoManual(cliente, juros, principal, data, fs) {
   // 2) o resto do juro se espalha pelas antecipações, na proporção do que cada
   //    uma rendeu: é o que mantém o relógio de cada uma coerente com o que foi
   //    pago dela
-  const corridos = abertas.map(t => ({ t, ...jurosAApropriar(t, ate) }))
+  // A parcela de juros em aberto também rendeu desde que foi reconhecida:
+  // juro não pago é saldo devedor, e deixá-la de fora cobraria menos do que
+  // a correção mostra.
+  const corridos = abertas.concat(parcelas).map(t => ({ t, ...jurosAApropriar(t, ate) }))
     .filter(x => x.dias > 0 && x.efeito > .005);
   const somaCorrida = +corridos.reduce((s, x) => s + x.efeito, 0).toFixed(2);
   const sobraJuros = restaJuros;
