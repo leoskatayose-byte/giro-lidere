@@ -7942,11 +7942,14 @@ function jmGrupos(mk, fs) {
 }
 
 /* O que já foi reconhecido naquele mês. O lote é o registro do antes, então é
-   ele que diz se o mês já rodou e é por ele que se desfaz. */
-const jmLote = mk => (DB.apropriacoes || []).find(l => mesDe(l.ate) === mk);
-/* Reconhecimentos antigos, feitos na data que fosse, também contam: o mês não
-   está pendente só porque o corte não caiu no último dia. */
-const jmTemLancamento = mk => movs().some(m => ehMovApropriacao(m) && mesDe(m.data) === mk);
+   ele que diz se o mês já rodou e é por ele que se desfaz.
+
+   O que conta é a data exata do corte, não o mês dela. Reconhecimento feito no
+   dia 1º ou no dia 15 cobriu o período até ali e deixou o resto do mês
+   correndo: tratar o mês como pronto por causa dele apagaria os dias que
+   faltam. Só o corte no último dia fecha o mês. */
+const jmLote = mk => (DB.apropriacoes || []).find(l => l.ate === ultimoDia(mk));
+const jmTemLancamento = mk => movs().some(m => ehMovApropriacao(m) && m.data === ultimoDia(mk));
 const jmFeito = mk => !!jmLote(mk) || jmTemLancamento(mk);
 
 /* Os meses encerrados que ainda não rodaram, do mais antigo para o mais novo.
