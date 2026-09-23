@@ -1067,9 +1067,10 @@ tr.crmov td{border-bottom-color:var(--line)}
         não entra no reconhecimento do fim do mês. É o caso da parceria, em que o recurso sai e
         volta sem cobrança.</span></label></div>
     <div class="field" id="cl_taxaWrap"><label>Taxa de antecipação deste cliente (% ao mês)</label>
-      <input type="number" step="0.01" min="0" id="cl_taxa" placeholder="em branco usa a taxa padrão">
-      <div class="hint">Deixe em branco para usar a taxa padrão. <b>Zero é um valor válido</b>:
-        é o caso de quem recebe recurso sem juros, só para ser ajudado.</div></div>
+      <input type="number" step="0.01" min="0" id="cl_taxa" placeholder="em branco usa a taxa da operação">
+      <div class="hint">Esta taxa <b>vale para tudo</b> deste cliente, inclusive para o que já foi
+        operado com outra. <b>Zero é um valor válido</b>: é o caso de quem recebe recurso sem juros.
+        Em branco, cada antecipação corrige pela taxa com que foi operada.</div></div>
     <div class="fgrid">
       <div class="field"><label>CNPJ ou CPF</label><input id="cl_doc" oninput="docInput('cl_doc','cl_docHint')" placeholder="00.000.000/0000-00">
         <div class="hint" id="cl_docHint"></div></div>
@@ -1603,16 +1604,29 @@ const clienteSemJuros = t => {
   const c = t && t.cliente ? clientePorNome(t.cliente) : null;
   return !!c && c.cobraJuros === false;
 };
-/* A taxa vem do título; sem ela, da ficha do cliente; sem ela, do padrão.
-   Em qualquer um dos dois níveis, zero é um valor legítimo: há cliente que
-   recebe recurso sem juros, só para ser ajudado, e isso precisa sobreviver a
-   uma mudança na taxa padrão. */
+/* A taxa é do cliente: vem da ficha dele, e só na falta dela vem do título ou
+   do padrão. A ordem já foi a inversa, e era a origem de dívida que não
+   existe: cliente com 0% no cadastro seguia rendendo porque uma antecipação
+   antiga carregava 5% gravado, e era ela que mandava.
+
+   Em qualquer um dos níveis, zero é um valor legítimo: há cliente que recebe
+   recurso sem juros, só para ser ajudado, e isso precisa sobreviver a uma
+   mudança na taxa padrão. A taxa do título continua gravada, porque registra o
+   que foi combinado naquele dia, e a Correção mostra quando ela difere. */
 const taxaDa = t => {
   if (clienteSemJuros(t)) return 0;
-  if (t && typeof t.taxaMensal === 'number' && isFinite(t.taxaMensal)) return t.taxaMensal;
   const c = t && t.cliente ? clientePorNome(t.cliente) : null;
   if (c && typeof c.taxaMensal === 'number' && isFinite(c.taxaMensal)) return c.taxaMensal;
+  if (t && typeof t.taxaMensal === 'number' && isFinite(t.taxaMensal)) return t.taxaMensal;
   return taxaPadrao();
+};
+/* Título cuja taxa de origem não é a que está sendo cobrada. Não é erro: é
+   operação feita sob outro acordo, ou taxa do cliente que mudou depois. Só
+   não pode ficar invisível. */
+const taxaDivergente = t => {
+  const propria = t && t.taxaMensal;
+  return typeof propria === 'number' && isFinite(propria)
+    && Math.abs(propria - taxaDa(t)) > .001;
 };
 /* ===== Juros compostos dia a dia =====
    É o modelo das planilhas de correção: o saldo de ontem rende hoje, e o juro
@@ -6451,13 +6465,23 @@ VIEWS.correcao = function () {
       como <span class="chip chip-warn">abertura</span>.
       Todo o resto abre no razão com um clique.</div>` : '';
 
+  // Taxa do cadastro vence a da operação. Quando as duas diferem, a tela diz:
+  // o número muda o que o cliente deve, e mudança silenciosa em dívida é a
+  // pior espécie de bug, porque ninguém vai procurar.
+  const divergentes = crAntecipacoes(fs).filter(t => t.cliente === crCli && taxaDivergente(t));
+  const avisoTaxa = (!isento && divergentes.length) ? `<div class="alert">
+      <b>${divergentes.length} antecipação(ões) foram operadas a outra taxa</b>
+      (${[...new Set(divergentes.map(t => fmtTaxa(t.taxaMensal) + '%'))].join(', ')}),
+      mas o cadastro de ${esc(crCli)} diz ${crRotuloTaxa(s)} ao mês, e é essa que vale.
+      A taxa de origem continua gravada em cada antecipação.
+      <button class="btn btn-sm right" onclick="go('clientes')">Ver cadastro</button></div>` : '';
   const avisoIsento = isento ? `<div class="alert">
       <b>${esc(crCli)} não paga juros.</b> O recurso sai e volta sem cobrança, então a correção não
       rende nada e o saldo é só o principal que ainda não voltou. A taxa gravada em cada antecipação
       continua registrada, porque ela diz o que foi combinado no dia, mas não é cobrada.
       Para voltar a cobrar, desmarque no cadastro do cliente.</div>` : '';
 
-  return filtros + stats + avisoIsento + crJuros(s) +
+  return filtros + stats + avisoIsento + avisoTaxa + crJuros(s) +
     (crGrao === 'DIA' ? crTabelaDia(s) : crTabelaMes(s)) +
     crAmortizacao(s) + aviso;
 };
