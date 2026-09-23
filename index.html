@@ -1601,7 +1601,11 @@ const clientePorNome = nome => nome
    A taxa do título continua gravada, porque ela registra o que foi combinado
    naquele dia. A chave só diz que não se cobra deste cliente. */
 const clienteSemJuros = t => {
-  const c = t && t.cliente ? clientePorNome(t.cliente) : null;
+  // Vale só para antecipação e para a parcela de juros que nasce dela. Título
+  // operado é outra relação: ali o ganho é o deságio, e prorrogação e juros de
+  // atraso continuam normais mesmo para quem não paga juro de antecipação.
+  if (!t || (t.tipo !== 'ANTECIPACAO' && t.tipo !== 'JUROS')) return false;
+  const c = t.cliente ? clientePorNome(t.cliente) : null;
   return !!c && c.cobraJuros === false;
 };
 /* A taxa é do cliente: vem da ficha dele, e só na falta dela vem do título ou
