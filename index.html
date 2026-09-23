@@ -1059,7 +1059,14 @@ tr.crmov td{border-bottom-color:var(--line)}
   <div class="modal-body">
     <input type="hidden" id="cl_id">
     <div class="field"><label>Nome / razão social *</label><input id="cl_nome"></div>
-    <div class="field"><label>Taxa de antecipação deste cliente (% ao mês)</label>
+    <div class="field"><label>Cobrança de juros</label>
+      <label style="display:flex;gap:8px;align-items:flex-start;font-size:12.5px;color:var(--dim);font-weight:400">
+        <input type="checkbox" id="cl_semJuros" onchange="clSemJuros()" style="margin-top:2px">
+        <span><b>Este cliente não paga juros.</b> Vale para tudo que ele já recebeu e para o que
+        vier: a taxa gravada em cada antecipação deixa de valer, a correção dele fica zerada e ele
+        não entra no reconhecimento do fim do mês. É o caso da parceria, em que o recurso sai e
+        volta sem cobrança.</span></label></div>
+    <div class="field" id="cl_taxaWrap"><label>Taxa de antecipação deste cliente (% ao mês)</label>
       <input type="number" step="0.01" min="0" id="cl_taxa" placeholder="em branco usa a taxa padrão">
       <div class="hint">Deixe em branco para usar a taxa padrão. <b>Zero é um valor válido</b>:
         é o caso de quem recebe recurso sem juros, só para ser ajudado.</div></div>
@@ -1582,13 +1589,28 @@ function razaoDoMes(mk, fs) {
    juros = valor × (taxa/100) ÷ 30 × dias corridos. Trocar isso muda o valor
    em reais, então mora num lugar só e todo mundo chama daqui. ===== */
 const taxaPadrao = () => (typeof DB.config.taxaAntecipacao === 'number' && isFinite(DB.config.taxaAntecipacao)) ? DB.config.taxaAntecipacao : 4;
+const clientePorNome = nome => nome
+  ? (DB.clientes || []).find(x => x.nome === nome && !x.deletedAt) : null;
+/* Cliente marcado como sem juros não rende, e pronto: a taxa gravada em cada
+   título dele deixa de valer. Existe porque zerar a taxa do cadastro não
+   bastava — a do título vence a do cadastro, e uma operação antiga a 5%
+   continuava cobrando de quem não se cobra nada. É o caso da parceria: o
+   recurso sai, volta no dia seguinte e ninguém paga juro.
+
+   A taxa do título continua gravada, porque ela registra o que foi combinado
+   naquele dia. A chave só diz que não se cobra deste cliente. */
+const clienteSemJuros = t => {
+  const c = t && t.cliente ? clientePorNome(t.cliente) : null;
+  return !!c && c.cobraJuros === false;
+};
 /* A taxa vem do título; sem ela, da ficha do cliente; sem ela, do padrão.
    Em qualquer um dos dois níveis, zero é um valor legítimo: há cliente que
    recebe recurso sem juros, só para ser ajudado, e isso precisa sobreviver a
    uma mudança na taxa padrão. */
 const taxaDa = t => {
+  if (clienteSemJuros(t)) return 0;
   if (t && typeof t.taxaMensal === 'number' && isFinite(t.taxaMensal)) return t.taxaMensal;
-  const c = t && t.cliente ? (DB.clientes || []).find(x => x.nome === t.cliente && !x.deletedAt) : null;
+  const c = t && t.cliente ? clientePorNome(t.cliente) : null;
   if (c && typeof c.taxaMensal === 'number' && isFinite(c.taxaMensal)) return c.taxaMensal;
   return taxaPadrao();
 };
@@ -3856,14 +3878,25 @@ function abrirCliente(id) {
   setVal('cl_id', c ? c.id : '');
   preenchePessoa('cl', c);
   setVal('cl_taxa', c && typeof c.taxaMensal === 'number' ? c.taxaMensal : '');
+  el('cl_semJuros').checked = !!c && c.cobraJuros === false;
+  clSemJuros();
   clCor = c && Number.isInteger(c.cor_idx) ? c.cor_idx : clientes().length % PALETA.length;
   pintaCores();
   openModal('ovCliente'); setTimeout(() => el('cl_nome').focus(), 60);
 }
+/* Com a chave ligada, o campo de taxa some: ele deixaria a impressão de que
+   ainda decide alguma coisa, e não decide. */
+function clSemJuros() {
+  el('cl_taxaWrap').style.display = el('cl_semJuros').checked ? 'none' : '';
+}
+
 function salvarCliente() {
   limpaErro('cl_erro');
   const dados = leParaPessoa('cl');
   if (!dados.nome) return erro('cl_erro', 'Informe o nome.');
+  // false é a escolha explícita de não cobrar; ausente é o comportamento
+  // normal, e é assim que todo cliente antigo continua como sempre foi
+  dados.cobraJuros = el('cl_semJuros').checked ? false : true;
   // Zero é escolha, vazio é ausência de escolha: um cliente que recebe recurso
   // sem juros precisa poder dizer zero sem que o sistema entenda "não informou"
   // e volte a aplicar a taxa padrão.
@@ -6392,9 +6425,11 @@ VIEWS.correcao = function () {
 
   if (!s.linhas.length) return filtros + `<div class="empty">Sem movimento de ${esc(crCli)} até ${fmtBR(ate)}.</div>`;
 
+  const isento = (clientePorNome(crCli) || {}).cobraJuros === false;
   const stats = `<div class="stats">
     <div class="stat"><div class="k">Saldo devedor</div><div class="v">${brl(s.saldo)}</div>
-      <div class="sub">corrigido até ${fmtBR(ate)}, ${crRotuloTaxa(s)} ao mês</div></div>
+      <div class="sub">${isento ? 'sem juros: só o principal que ainda não voltou'
+      : `corrigido até ${fmtBR(ate)}, ${crRotuloTaxa(s)} ao mês`}</div></div>
     <div class="stat"><div class="k">Principal em aberto</div><div class="v">${brl(s.principal)}</div>
       <div class="sub">de ${brl(s.enviado)} enviados</div></div>
     <div class="stat"><div class="k">Juros em aberto</div><div class="v pos">${brl(s.juros)}</div>
@@ -6416,7 +6451,13 @@ VIEWS.correcao = function () {
       como <span class="chip chip-warn">abertura</span>.
       Todo o resto abre no razão com um clique.</div>` : '';
 
-  return filtros + stats + crJuros(s) +
+  const avisoIsento = isento ? `<div class="alert">
+      <b>${esc(crCli)} não paga juros.</b> O recurso sai e volta sem cobrança, então a correção não
+      rende nada e o saldo é só o principal que ainda não voltou. A taxa gravada em cada antecipação
+      continua registrada, porque ela diz o que foi combinado no dia, mas não é cobrada.
+      Para voltar a cobrar, desmarque no cadastro do cliente.</div>` : '';
+
+  return filtros + stats + avisoIsento + crJuros(s) +
     (crGrao === 'DIA' ? crTabelaDia(s) : crTabelaMes(s)) +
     crAmortizacao(s) + aviso;
 };
